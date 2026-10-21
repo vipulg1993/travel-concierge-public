@@ -49,7 +49,7 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 
 
-async def _stream(message: str, parent_ctx=None) -> AsyncGenerator[str, None]:
+async def _stream(message: str, parent_ctx=None, session_id: Optional[str] = None) -> AsyncGenerator[str, None]:
     """Stream SSE events from the Strands agent.
 
     If `parent_ctx` is provided (extracted from the inbound invocation's
@@ -58,12 +58,17 @@ async def _stream(message: str, parent_ctx=None) -> AsyncGenerator[str, None]:
     span — bypassing AgentCore's internal dispatch hop that otherwise
     rewrites the HTTP traceparent header and produces a disconnected
     sub-root in the trace tree.
+
+    `session_id` is stamped on the wrapper span so the AgentCore online-eval
+    pipeline can cluster the trace into a scored session.
     """
     # Attach the parent context (if any) so start_as_current_span() picks it up.
     token = otel_context.attach(parent_ctx) if parent_ctx is not None else None
     try:
         with _tracer.start_as_current_span("sub_agent.invocation") as span:
             span.set_attribute("sub_agent.name", "flights")
+            if session_id:
+                span.set_attribute("session.id", session_id)
             async for item in _stream_impl(message):
                 yield item
     finally:
@@ -144,7 +149,7 @@ async def invocations(request: Request):
     tc = (body.get("_trace_context") or {}) if isinstance(body, dict) else {}
     parent_ctx = _w3c.extract(tc) if tc.get("traceparent") else None
     return StreamingResponse(
-        _stream(data.message, parent_ctx=parent_ctx),
+        _stream(data.message, parent_ctx=parent_ctx, session_id=data.session_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

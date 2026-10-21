@@ -406,9 +406,15 @@ SYSTEM_PROMPT = _system_prompt()
 
 def create_orchestrator_agent(session_id: str, user_id: str) -> Agent:
     model = BedrockModel(model_id=MODEL_ID, region_name=REGION)
+    # session.id must appear on span attributes for the AgentCore online-eval
+    # pipeline to cluster the trace into a scored session. Strands propagates
+    # trace_attributes onto every span it emits.
     return Agent(
         model=model,
         tools=build_tools(session_id, user_id),
         system_prompt=SYSTEM_PROMPT,
-        trace_attributes={"gen_ai.capture_message_content": True},
+        trace_attributes={
+            "gen_ai.capture_message_content": True,
+            "session.id": session_id,
+        },
     )

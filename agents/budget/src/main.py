@@ -93,11 +93,13 @@ def _grab_json_after(text: str, marker: str) -> Optional[str]:
     return text[start:]
 
 
-async def _stream(message: str, parent_ctx=None) -> AsyncGenerator[str, None]:
+async def _stream(message: str, parent_ctx=None, session_id: Optional[str] = None) -> AsyncGenerator[str, None]:
     token = otel_context.attach(parent_ctx) if parent_ctx is not None else None
     try:
         with _tracer.start_as_current_span("sub_agent.invocation") as span:
             span.set_attribute("sub_agent.name", "budget")
+            if session_id:
+                span.set_attribute("session.id", session_id)
             async for item in _stream_impl(message):
                 yield item
     finally:
@@ -134,7 +136,7 @@ async def invocations(request: Request):
     tc = (body.get("_trace_context") or {}) if isinstance(body, dict) else {}
     parent_ctx = _w3c.extract(tc) if tc.get("traceparent") else None
     return StreamingResponse(
-        _stream(data.message, parent_ctx=parent_ctx),
+        _stream(data.message, parent_ctx=parent_ctx, session_id=data.session_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

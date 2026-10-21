@@ -172,6 +172,7 @@ async def invocations(request: Request):
     body = await request.json()
     data = body.get("input", body)
     message = data.get("message", "").strip()
+    session_id = data.get("session_id") or ""
     if not message:
         return JSONResponse({"error": "message cannot be empty"}, status_code=400)
 
@@ -185,9 +186,15 @@ async def invocations(request: Request):
     try:
         with tracer.start_as_current_span("sub_agent.invocation") as root_span:
             root_span.set_attribute("sub_agent.name", "activities")
+            if session_id:
+                # Required by the AgentCore online-eval pipeline to cluster
+                # this trace into a scored session.
+                root_span.set_attribute("session.id", session_id)
             with tracer.start_as_current_span("activities_graph.invoke") as span:
                 span.set_attribute("gen_ai.agent.name", "activities")
                 span.set_attribute("gen_ai.operation.name", "invoke_agent")
+                if session_id:
+                    span.set_attribute("session.id", session_id)
                 final: dict[str, Any] = _graph.invoke({"user_message": message})
     finally:
         if token is not None:
