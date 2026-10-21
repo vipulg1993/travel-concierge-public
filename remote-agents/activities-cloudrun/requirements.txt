@@ -1,0 +1,24 @@
+langgraph>=0.6.0
+langchain-core>=0.3.0
+
+# FastAPI server
+fastapi>=0.115.0
+uvicorn>=0.38.0
+pydantic>=2.0.0
+
+# Pure OpenTelemetry SDK — no ADOT. Demonstrates that any OTel-instrumented
+# agent, even cross-cloud, can ship spans directly to AWS CloudWatch Omni
+# without AWS-specific distros or sidecars. Spans are SigV4-signed in-app
+# via a thin botocore-based requests.Session wrapper (see otel_setup.py)
+# because the CloudWatch OTLP traces endpoint requires AWS auth.
+opentelemetry-api>=1.30.0
+opentelemetry-sdk>=1.30.0
+opentelemetry-exporter-otlp-proto-http>=1.30.0
+opentelemetry-instrumentation-fastapi>=0.51b0
+opentelemetry-instrumentation-botocore>=0.51b0
+opentelemetry-instrumentation-requests>=0.51b0
+opentelemetry-instrumentation-logging>=0.51b0
+opentelemetry-propagator-aws-xray>=1.0.1
+
+# AWS Bedrock (cross-cloud model call) + botocore for the SigV4 signer
+boto3>=1.43

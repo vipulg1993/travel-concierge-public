@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# macOS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Kiro / Omni local state
+.kiro/
+.omni/
+.env.omni
+.env.*
+.env
+
+# AWS / credentials
+.aws/
+*.pem
+credentials
+*.key
+
+# Phase B dev-local artifacts
+.local-logs/
+
+# Progress artifacts (never ship)
+.agents/
+
+# Keep .env.example tracked (template file)
+!.env.example
+.claude/
+.github/
+.cursor/
+.omni/collector.json

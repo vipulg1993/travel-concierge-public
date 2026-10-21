@@ -1,0 +1,64 @@
+# ADOT Collector config for the EKS hotels pod.
+#
+# Mirrors the config we use for the GCP Cloud Run activities agent:
+# receives OTLP from the hotels container on localhost:4318, SigV4-signs
+# the forwarded request, and ships to the CloudWatch OTLP traces ingest
+# endpoint (hostname xray.{region}.amazonaws.com, service=xray for SigV4).
+#
+# We use the OTLP endpoint (not the legacy `awsxray` exporter) because it
+# preserves the full OTel span attribute set, including `gen_ai.input.
+# messages` / `gen_ai.output.messages` that Omni's trace detail panel
+# renders as Input/Output.
+#
+# SigV4 credentials come from the pod's IRSA role — the sidecar inherits
+# the AWS_* env vars that the EKS Pod Identity Webhook injects for IRSA.
+
+extensions:
+  sigv4auth:
+    region: us-east-1
+    service: xray
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 50
+  # Tag every span with cloud + framework attributes so Omni's topology
+  # view groups the EKS pod distinctly from AgentCore runtimes.
+  resource/add_cloud:
+    attributes:
+      - key: cloud.provider
+        value: aws
+        action: upsert
+      - key: cloud.platform
+        value: aws_eks
+        action: upsert
+      - key: service.framework
+        value: strands
+        action: upsert
+      - key: deployment.environment
+        value: eks-fargate
+        action: upsert
+
+exporters:
+  otlphttp/xray:
+    endpoint: https://xray.us-east-1.amazonaws.com
+    auth:
+      authenticator: sigv4auth
+    compression: gzip
+
+service:
+  extensions: [sigv4auth]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource/add_cloud]
+      exporters: [otlphttp/xray]
+  telemetry:
+    logs:
+      level: info

@@ -1,0 +1,163 @@
+# Kubernetes manifests for the Hotels agent on EKS Fargate.
+#
+# Reuses the exact same container image as the AgentCore version — same
+# Strands code, same Dockerfile, same aws-opentelemetry-distro auto-
+# instrumentation. The only differences from the AgentCore deployment are:
+#   1. Running under K8s (ServiceAccount + Deployment) instead of under
+#      AgentCore Runtime's managed lifecycle.
+#   2. IAM via IRSA (OIDC role assumed by the pod's SA) instead of
+#      being injected by AgentCore.
+#   3. External exposure via a Cloudflare Tunnel sidecar that gives the
+#      pod a public `*.trycloudflare.com` URL. We use this instead of
+#      a Service type=LoadBalancer because EKS in this account/region
+#      assigns ALB/NLB IPs from 100.48.0.0/12, adjacent to the carrier-
+#      grade NAT reserved range (100.64.0.0/10), which is aggressively
+#      filtered by many ISPs and corporate networks.
+#
+# All observability env vars (OTel, LANGFUSE_BASE_URL, OPT_OUT) match
+# the AgentCore runtime config so spans flow into the same Omni trace
+# tree with content attributes intact.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hotels
+---
+# IRSA role ARN is annotated at `kubectl apply` time by deploy.sh.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hotels
+  namespace: hotels
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hotels
+  namespace: hotels
+  labels:
+    app: hotels
+    service.framework: strands
+    cloud.platform: aws_eks
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hotels
+  template:
+    metadata:
+      labels:
+        app: hotels
+        service.framework: strands
+        cloud.platform: aws_eks
+    spec:
+      serviceAccountName: hotels
+      containers:
+        # ── cloudflared sidecar — public URL for the hotels container ──
+        - name: cloudflared
+          image: cloudflare/cloudflared:latest
+          args:
+            - tunnel
+            - --no-autoupdate
+            - --metrics
+            - "0.0.0.0:2000"
+            - --url
+            - http://localhost:8080
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { cpu: "250m", memory: "256Mi" }
+        # NOTE: no ADOT Collector sidecar. Per AWS docs
+        # (https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html):
+        # "The ADOT Collector is not supported for agent observability. To send
+        # telemetry from an agent hosted outside of AgentCore runtime, you must
+        # use either the ADOT SDK or the AWS Lambda Layer for OpenTelemetry."
+        # We now use the ADOT SDK directly in the hotels container, which SigV4-
+        # signs to the CloudWatch OTLP traces endpoint using IRSA credentials.
+        # ── hotels Strands agent (same image as the AgentCore version) ──
+        - name: hotels
+          image: PLACEHOLDER_IMAGE_URI  # replaced by deploy.sh with the ECR URI
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            # Core
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: AGENT_NAME
+              value: "hotels"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: HOTELS_TABLE
+              value: "travel-concierge-hotels"
+            # ─────────────────────────────────────────────────────────────
+            # AgentCore Observability — AWS-recommended env vars for
+            # non-AgentCore-hosted agents. Per
+            # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html
+            # the ADOT SDK (not Collector) ships spans directly to the X-Ray
+            # OTLP ingest endpoint using IRSA role credentials.
+            # ─────────────────────────────────────────────────────────────
+            - name: AGENT_OBSERVABILITY_ENABLED
+              value: "true"
+            - name: AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT
+              value: "true"
+            # Suppress FastAPI auto SERVER span (ghost orphan). Our
+            # sub_agent.invocation span, created in main.py under the
+            # orchestrator's trace context, replaces it.
+            - name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS
+              value: "invocations,ping"
+            - name: OTEL_PYTHON_DISTRO
+              value: "aws_distro"
+            - name: OTEL_PYTHON_CONFIGURATOR
+              value: "aws_configurator"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            - name: OTEL_TRACES_EXPORTER
+              value: "otlp"
+            # Route spans to the agent's own log group (via Transaction Search),
+            # matching the AgentCore-hosted log group naming convention.
+            - name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
+              value: "x-aws-log-group=/aws/bedrock-agentcore/runtimes/travel_concierge_hotels-eks,x-aws-log-stream=spans"
+            - name: OTEL_EXPORTER_OTLP_LOGS_HEADERS
+              value: "x-aws-log-group=/aws/bedrock-agentcore/runtimes/travel_concierge_hotels-eks,x-aws-log-stream=runtime-logs,x-aws-metric-namespace=bedrock-agentcore"
+            # Service name + resource attrs so Omni's topology view groups
+            # EKS pods distinctly from the AgentCore runtimes.
+            - name: OTEL_SERVICE_NAME
+              value: "travel_concierge_hotels.eks"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "service.name=travel_concierge_hotels.eks,aws.log.group.names=/aws/bedrock-agentcore/runtimes/travel_concierge_hotels-eks,cloud.platform=aws_eks,service.framework=strands,deployment.environment=eks-fargate"
+            # Standard gen_ai content capture flag (OTel semconv standard)
+            - name: OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+              value: "true"
+            # Strands-specific gen_ai span emission knobs. Strands 1.35's
+            # OTel tracer only emits full gen_ai.* attributes (model, input/
+            # output messages, usage) when these are enabled AND it detects
+            # a Langfuse-style endpoint. We're not shipping to Langfuse;
+            # LANGFUSE_BASE_URL=langfuse is a value-check hack that flips
+            # Strands into the serialization mode where it attaches gen_ai
+            # attributes to the span, which is what Omni's trace UI reads.
+            - name: STRANDS_OTEL_ENABLE_CONTENT_TRACING
+              value: "true"
+            - name: STRANDS_OTEL_ENABLE_CONTENT_CAPTURE
+              value: "true"
+            - name: OTEL_SEMCONV_STABILITY_OPT_IN
+              value: "gen_ai_latest_experimental,gen_ai_tool_definitions"
+            - name: LANGFUSE_BASE_URL
+              value: "langfuse"
+            # Keep OTel log + metric exporters off; pod logs flow via K8s log
+            # driver, and we don't currently use OTel metrics.
+            - name: OTEL_LOGS_EXPORTER
+              value: "none"
+            - name: OTEL_METRICS_EXPORTER
+              value: "none"
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "1",    memory: "1Gi" }
+          readinessProbe:
+            httpGet: { path: /ping, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /ping, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 30

@@ -1,0 +1,35 @@
+# eksctl cluster spec for the Hotels agent on EKS Fargate.
+#
+# Pure Fargate (no managed nodes) keeps the ops surface minimal: no node
+# patching, no autoscaler, no cluster-autoscaler/karpenter. Fargate pods pay
+# per-vCPU-hour so a single 0.5 vCPU / 1 GB pod is a few dollars a month,
+# plus the fixed EKS control-plane cost (~$73/month).
+#
+# OIDC is enabled so we can wire IRSA (IAM Role for Service Account) for the
+# Hotels pod, giving the pod least-privilege access to the DynamoDB hotels
+# table + Bedrock InvokeModel + X-Ray write — exactly like the AgentCore
+# Runtime version of the hotels agent today.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: travel-concierge
+  region: us-east-1
+  version: "1.31"
+  tags:
+    project: travel-concierge
+    purpose: hotels-eks-demo
+
+iam:
+  withOIDC: true
+
+fargateProfiles:
+  - name: fp-default
+    selectors:
+      - namespace: default
+      - namespace: kube-system
+      - namespace: hotels
+
+cloudWatch:
+  clusterLogging:
+    enableTypes: ["audit", "authenticator", "controllerManager"]

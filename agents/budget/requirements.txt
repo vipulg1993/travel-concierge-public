@@ -1,0 +1,17 @@
+# CrewAI framework (replaces Strands for this specialist).
+# Pin >=1.10 to match the ADOT distro's built-in CrewAI instrumentor
+# event schema. Below 1.10 the instrumentor crashes on missing event fields.
+crewai>=1.10,<2.0
+litellm>=1.50
+
+# FastAPI server
+fastapi>=0.115.0
+uvicorn>=0.38.0
+pydantic>=2.0.0
+
+# AWS SDK (for SSM policy read: budget/prompt_variant)
+boto3>=1.43
+
+# OTel base — aws-opentelemetry-distro>=0.10 already includes a CrewAI
+# instrumentor that emits standard gen_ai.* spans, so no openlit needed.
+aws-opentelemetry-distro>=0.10.1
