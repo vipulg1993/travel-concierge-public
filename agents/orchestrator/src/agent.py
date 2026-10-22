@@ -9,7 +9,7 @@ Trace shape (one request):
     invoke_agent (this agent)
     ├── gen_ai.chat (initial plan)
     ├── tool_call: search_flights → bedrock-agentcore:InvokeAgentRuntime → Flights
-    ├── tool_call: search_hotels  → bedrock-agentcore:InvokeAgentRuntime → Hotels
+    ├── tool_call: search_hotels  → HTTP → EKS Fargate pod (Hotels)
     ├── tool_call: check_weather  → bedrock-agentcore:InvokeAgentRuntime → Weather
     ├── tool_call: estimate_budget → bedrock-agentcore:InvokeAgentRuntime → Budget
     └── gen_ai.chat (final synthesis)
@@ -50,9 +50,10 @@ MODEL_ID = os.environ.get(
 # Specialist ARNs are injected at deploy time via SSM lookups in main.py.
 # Env var fallback keeps local development working without SSM.
 FLIGHTS_ARN = os.environ.get("FLIGHTS_RUNTIME_ARN", "")
-HOTELS_ARN = os.environ.get("HOTELS_RUNTIME_ARN", "")
 WEATHER_ARN = os.environ.get("WEATHER_RUNTIME_ARN", "")
 BUDGET_ARN = os.environ.get("BUDGET_RUNTIME_ARN", "")
+# Hotels has no AgentCore ARN — the hotels specialist is EKS-only. HOTELS_EKS_URL
+# (set below) is required.
 
 # Remote agent URLs (hosted outside AgentCore Runtime — on EKS, Cloud Run, etc.).
 # Populated at deploy-time via SSM. The orchestrator calls these over plain
@@ -278,13 +279,16 @@ def build_tools(session_id: str, user_id: str):
         q = f"Find hotels in {destination} for {dates} under ${max_price_per_night} per night."
         if HOTELS_LOCAL_URL:
             return _invoke_remote_agent(HOTELS_LOCAL_URL, q, session_id, user_id)
-        if HOTELS_EKS_URL:
-            # Route to the EKS Fargate pod (same Strands agent, different
-            # compute). Produces an outbound HTTP span in the trace instead of
-            # a bedrock-agentcore:InvokeAgentRuntime span, visibly showing the
-            # EKS hop in Omni.
-            return _invoke_remote_agent(HOTELS_EKS_URL, q, session_id, user_id)
-        return _invoke_specialist(HOTELS_ARN, q, session_id, user_id)
+        if not HOTELS_EKS_URL:
+            # Hotels is EKS-only — no AgentCore fallback. If the EKS URL isn't
+            # set at deploy time (SSM param missing or empty), the orchestrator
+            # fails this tool loudly instead of silently routing elsewhere.
+            raise RuntimeError(
+                "hotels specialist unreachable: HOTELS_EKS_URL env var not set"
+            )
+        # Route to the EKS Fargate pod. Produces an outbound HTTP span in the
+        # trace, visibly showing the EKS hop in Omni.
+        return _invoke_remote_agent(HOTELS_EKS_URL, q, session_id, user_id)
 
     @tool
     def check_weather(destination: str, dates: str) -> str:

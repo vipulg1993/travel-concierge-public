@@ -35,10 +35,12 @@ renders them in trace trees, service maps, and dashboards.
 
 ## 2. Agent-by-agent configuration
 
-### 2.1 AgentCore Runtime (4 agents: orchestrator, flights, weather, budget)
+### 2.1 AgentCore Runtime (orchestrator, flights, weather, budget)
 
-The simplest path. **AgentCore wires 95% of OTel for you**; the one env var
-you need to set is the content opt-out.
+The simplest path. **AgentCore wires 95% of OTel for you**; one env var
+turns content capture on. Works identically for Strands (orchestrator,
+flights, weather) and CrewAI (budget) through ADOT's bundled framework
+instrumentors.
 
 **SDK:** [`aws-opentelemetry-distro>=0.21.0`](https://github.com/aws-observability/aws-otel-python-instrumentation) (ADOT) — a vendored OpenTelemetry Python distribution with AWS extensions
 
@@ -49,25 +51,12 @@ botocore, logging and attaches ADOT's TracerProvider as the global one.
 **Env vars that YOU set** (`infra/deploy.py :: _runtime_env`):
 
 ```bash
-# Required by AWS for content capture (keeps gen_ai.input/output.messages on spans)
 AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true
-
-# Suppress the FastAPI auto-SERVER span for /invocations and /ping;
-# the sub_agent.invocation span (payload-trace-context pattern) replaces it
-OTEL_PYTHON_FASTAPI_EXCLUDED_URLS=invocations,ping
-
-# Standard OTel gen_ai semconv — produces gen_ai.input/output.messages on chat spans
-OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
-OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_tool_definitions
-
-# Strands-specific knobs (framework-level). Strands 1.35 only mirrors
-# gen_ai events onto span attributes when it detects a "Langfuse-like"
-# endpoint. Setting LANGFUSE_BASE_URL to the literal string "langfuse"
-# flips Tracer.is_langfuse without routing any data to Langfuse.
-STRANDS_OTEL_ENABLE_CONTENT_TRACING=true
-STRANDS_OTEL_ENABLE_CONTENT_CAPTURE=true
-LANGFUSE_BASE_URL=langfuse
 ```
+
+`AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true` keeps prompt and response text
+on the spans — the only telemetry env var AWS asks you to set on
+AgentCore + ADOT with Strands.
 
 **Env vars AgentCore injects for you:**
 
@@ -238,5 +227,5 @@ distributions.
 
 ## 3. Trace stitching and content rendering
 
-- **Traceparent propagation.** Each outbound call carries a W3C `traceparent` (auto-injected by the OTel instrumentors on HTTP, and copied into the JSON body as `_trace_context.traceparent` for calls through the AgentCore SDK where the control plane rewrites the header) so every sub-agent span nests under the caller in one unified trace tree.
-- **Content rendering.** Omni's trace detail panel reads the OpenTelemetry GenAI semantic conventions (`gen_ai.*` span attributes — notably `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, `gen_ai.usage.*`, `gen_ai.request.model`) to render prompts, responses, system instructions, token usage, and model identity inline.
+- **Traceparent propagation.** Each outbound call carries a W3C `traceparent` so every sub-agent span nests under the caller in one unified trace tree.
+- **Content rendering.** Omni's trace detail panel reads the OpenTelemetry GenAI semantic conventions (`gen_ai.*`) to render prompts, responses, system instructions, token usage, and model identity inline.

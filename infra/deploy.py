@@ -61,7 +61,10 @@ ROOT = Path(__file__).parent.parent
 AGENTS_DIR = ROOT / "agents"
 
 # Order matters: specialists first, orchestrator last.
-AGENT_ORDER = ["flights", "hotels", "weather", "budget", "orchestrator"]
+# `hotels` is NOT included — the hotels specialist runs on EKS Fargate only,
+# deployed via `remote-agents/hotels-eks/deploy.sh`. The orchestrator reaches it
+# over HTTP via HOTELS_EKS_URL (SSM-sourced).
+AGENT_ORDER = ["flights", "weather", "budget", "orchestrator"]
 
 RUNTIME_NAMES = {a: f"travel_concierge_{a}" for a in AGENT_ORDER}
 
@@ -179,6 +182,13 @@ def _runtime_env(agent: str) -> dict:
     AgentCore's managed configuration own trace propagation. Content capture
     is handled via `otel_patch.py` instead of env vars.
     """
+    # Agents in LEAN_ENV_AGENTS get the AWS-doc-minimal env block (one var).
+    # Validated against a dedicated test runtime (strands-agents>=1.60,
+    # aws-opentelemetry-distro>=0.21) that Omni's trace detail panel renders
+    # correctly from span events rather than span attributes.
+    # Expand this set one agent at a time after each redeploy is verified.
+    LEAN_ENV_AGENTS = {"weather", "flights", "orchestrator", "budget"}
+
     env = {
         "AWS_REGION": REGION,
         "LOG_LEVEL": "INFO",
@@ -196,22 +206,25 @@ def _runtime_env(agent: str) -> dict:
         # current span, so suppressing the auto SERVER span removes the ghost
         # without losing any useful span data.
         "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS": "invocations,ping",
-        # ─── Strands content capture (framework-specific, not AgentCore managed) ───
-        # These are NOT AgentCore managed defaults, so they do not conflict with
-        # AWS's "don't duplicate managed defaults" guidance. They configure the
-        # Strands framework's own tracer, which otherwise emits gen_ai content
-        # as OTel events (not span attributes), making Omni render "No content".
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
-        "STRANDS_OTEL_ENABLE_CONTENT_TRACING": "true",
-        "STRANDS_OTEL_ENABLE_CONTENT_CAPTURE": "true",
-        "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental,gen_ai_tool_definitions",
-        # Flip Strands' Tracer.is_langfuse to True (via substring match) so
-        # gen_ai event attrs mirror onto span attrs. Value is non-functional.
-        "LANGFUSE_BASE_URL": "langfuse",
     }
+
+    if agent not in LEAN_ENV_AGENTS:
+        # Legacy Strands 1.35 content-capture workarounds + newer-semconv
+        # opt-in. Kept here for the agents we haven't yet validated on the
+        # one-var pattern. Strands 1.60+ emits content as OTel span events
+        # with just AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT, which Omni renders
+        # natively, so these can be dropped per agent as we verify them.
+        env.update({
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
+            "STRANDS_OTEL_ENABLE_CONTENT_TRACING": "true",
+            "STRANDS_OTEL_ENABLE_CONTENT_CAPTURE": "true",
+            "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental,gen_ai_tool_definitions",
+            "LANGFUSE_BASE_URL": "langfuse",
+        })
     if agent == "orchestrator":
-        # Inject specialist ARNs (looked up from SSM after specialists are deployed)
-        for spec in ("flights", "hotels", "weather", "budget"):
+        # Inject specialist ARNs (looked up from SSM after specialists are deployed).
+        # Hotels is excluded — it runs on EKS, reached via HOTELS_EKS_URL below.
+        for spec in ("flights", "weather", "budget"):
             try:
                 arn = ssm.get_parameter(Name=f"{RUNTIME_ARN_PREFIX}/{spec}")["Parameter"]["Value"]
                 env[f"{spec.upper()}_RUNTIME_ARN"] = arn
