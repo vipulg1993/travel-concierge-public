@@ -180,7 +180,8 @@ def _runtime_env(agent: str) -> dict:
     We removed previously-set OTEL_PROPAGATORS, OTEL_TRACES_EXPORTER-adjacent
     overrides, and Strands content-capture env vars from this block to let
     AgentCore's managed configuration own trace propagation. Content capture
-    is handled via `otel_patch.py` instead of env vars.
+    is handled by Strands' native OTel tracer (Strands >=1.60) in combination
+    with AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true (set below).
     """
     # Agents in LEAN_ENV_AGENTS get the AWS-doc-minimal env block (one var).
     # Validated against a dedicated test runtime (strands-agents>=1.60,

@@ -1,10 +1,6 @@
 # Telemetry Ingestion — Reference
 
-Deep reference for the Oct 20/22/27 demo's ingestion segment. Pairs with
-[`telemetry-ingestion.svg`](telemetry-ingestion.svg) /
-[`telemetry-ingestion.png`](telemetry-ingestion.png).
 
-## TL;DR
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -92,18 +88,6 @@ per-runtime log groups with `UNIFIED_TRACES_DESTINATION_ENABLED=true`.
 Same SDK as AgentCore, but **you wire every env var and IAM yourself**.
 Equivalent to running the AgentCore config "by hand".
 
-> The last five env vars in the block below
-> (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`,
-> `STRANDS_OTEL_ENABLE_CONTENT_TRACING`, `STRANDS_OTEL_ENABLE_CONTENT_CAPTURE`,
-> `OTEL_SEMCONV_STABILITY_OPT_IN`, `LANGFUSE_BASE_URL`) match a workaround
-> from Strands 1.35 that is no longer required with Strands ≥1.60 — the
-> single `AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true` is sufficient on
-> AgentCore (§2.1) and should be sufficient here too. They are kept in the
-> live manifest pending an EKS redeploy to validate; the EKS redeploy
-> rolls the Cloudflare quick-tunnel URL, so it must be paired with
-> `python3 infra/deploy.py --only orchestrator --skip-build` to refresh
-> the orchestrator's `HOTELS_EKS_URL`.
-
 **SDK:** `aws-opentelemetry-distro>=0.21.0` (ADOT)
 
 **Launch:** `CMD ["opentelemetry-instrument", "uvicorn", "main:app", ...]`
@@ -123,12 +107,6 @@ env:
   - { name: OTEL_EXPORTER_OTLP_LOGS_HEADERS,               value: "x-aws-log-group=/aws/bedrock-agentcore/runtimes/travel_concierge_hotels-eks,x-aws-log-stream=runtime-logs,x-aws-metric-namespace=bedrock-agentcore" }
   - { name: OTEL_SERVICE_NAME,                             value: "travel_concierge_hotels.eks" }
   - { name: OTEL_RESOURCE_ATTRIBUTES,                      value: "service.name=travel_concierge_hotels.eks,aws.log.group.names=/aws/bedrock-agentcore/runtimes/travel_concierge_hotels-eks,cloud.platform=aws_eks,service.framework=strands,deployment.environment=eks-fargate" }
-  - { name: OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, value: "true" }
-  - { name: STRANDS_OTEL_ENABLE_CONTENT_TRACING,           value: "true" }
-  - { name: STRANDS_OTEL_ENABLE_CONTENT_CAPTURE,           value: "true" }
-  - { name: OTEL_SEMCONV_STABILITY_OPT_IN,                 value: "gen_ai_latest_experimental,gen_ai_tool_definitions" }
-  - { name: LANGFUSE_BASE_URL,                             value: "langfuse" }
-  - { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS,             value: "invocations,ping" }
 ```
 
 **Auth:** IRSA (IAM Role for Service Account) — EKS Pod Identity Webhook
@@ -166,28 +144,42 @@ opentelemetry-propagator-aws-xray>=1.0.1   # for cross-propagator support
 
 **Env vars** (`remote-agents/activities-cloudrun/deploy.sh --set-env-vars`):
 
+App config (consumed by `app.py`, not by OTel):
+
 ```bash
-# AWS credentials — static IAM user keys (Cloud Run secrets)
+# AWS credentials — static IAM user keys stored as Cloud Run secrets. The
+# user needs xray:PutTraceSegments / PutSpans / PutSpansForIndexing to ship
+# traces to the CloudWatch OTLP ingest, plus bedrock:InvokeModel for the
+# cross-cloud model call.
 AWS_ACCESS_KEY_ID=<static key>
 AWS_SECRET_ACCESS_KEY=<static secret>
-AWS_REGION=us-east-1
+
+# Where the agent calls Bedrock from GCP.
 AWS_BEDROCK_REGION=us-east-1
 
-# GCP region (for resource attribute)
+# GCP region, read into the span resource as `cloud.region`.
 GOOGLE_CLOUD_REGION=us-central1
+```
 
-# OTel wire configuration
+OTel configuration:
+
+```bash
+# Region used by the SigV4 signer and the default OTLP endpoint.
+AWS_REGION=us-east-1
+
 OTEL_SERVICE_NAME=travel_concierge_activities.gcp
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://xray.us-east-1.amazonaws.com/v1/traces
 
-# Content capture
+# OTel GenAI auto-instrumentor toggles. Inert for this service because we
+# hand-roll gen_ai.* attributes on manual spans in app.py (see below), but
+# kept set so any future OTel GenAI instrumentor added to this container
+# would honor the content-capture + newer-semconv behavior out of the box.
 OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
 OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
 
-# Logging correlation
-OTEL_PYTHON_LOG_CORRELATION=true
-
-# Suppress FastAPI auto-SERVER span for /invocations and /ping
+# Suppress FastAPI auto-SERVER span for /invocations and /ping (same
+# rationale as the AgentCore agents — our sub_agent.invocation span, created
+# in app.py under the orchestrator's trace context, replaces it).
 OTEL_PYTHON_FASTAPI_EXCLUDED_URLS=invocations,ping
 ```
 
@@ -199,6 +191,7 @@ resource = Resource.create({
     "service.name":   "travel_concierge_activities.gcp",
     "cloud.provider": "gcp",
     "cloud.platform": "gcp_cloud_run",
+    "cloud.region":   os.environ.get("GOOGLE_CLOUD_REGION", "us-central1"),
 })
 
 # 2. Tracer provider with X-Ray-compatible trace-id (first 8 hex = epoch seconds)
@@ -225,8 +218,13 @@ set_global_textmap(CompositePropagator([
 BotocoreInstrumentor().instrument()
 FastAPIInstrumentor.instrument_app(app)
 RequestsInstrumentor().instrument()
-LoggingInstrumentor().instrument()
 ```
+
+The GenAI span attributes (`gen_ai.operation.name`, `gen_ai.request.model`,
+`gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.usage.*`,
+`gen_ai.agent.name`) are set directly in `app.py` on hand-crafted spans
+around the LangGraph nodes — no OpenInference or auto-instrumentor needed.
+This keeps the demo's "pure OTel, no AWS-specific distro" thesis intact.
 
 **SigV4 wrapper (`SigV4Session`):** 30 lines using `botocore.auth.SigV4Auth`
 and `botocore.awsrequest.AWSRequest` to sign every outbound OTLP POST with

@@ -17,7 +17,8 @@ opentelemetry-exporter-otlp-proto-http>=1.30.0
 opentelemetry-instrumentation-fastapi>=0.51b0
 opentelemetry-instrumentation-botocore>=0.51b0
 opentelemetry-instrumentation-requests>=0.51b0
-opentelemetry-instrumentation-logging>=0.51b0
+# Provides AwsXRayPropagator so inbound X-Amzn-Trace-Id headers from AWS
+# callers are parsed into a usable OTel SpanContext.
 opentelemetry-propagator-aws-xray>=1.0.1
 
 # AWS Bedrock (cross-cloud model call) + botocore for the SigV4 signer

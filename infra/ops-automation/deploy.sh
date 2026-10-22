@@ -199,7 +199,7 @@ echo " SNS:       $TOPIC_ARN"
 echo " Alarm:     $ALARM_NAME  (threshold ${DURATION_THRESHOLD_MS}ms Avg, 2x60s)"
 echo
 echo " To trigger an investigation end-to-end, elevate the weather"
-echo " provider's response time (e.g., reduce the Lambda's memory to 128 MB)."
+echo " provider's response time (e.g., via scripts/scenario.sh B on)."
 echo " The alarm will transition to ALARM within ~2 minutes; a backlog"
 echo " task should appear in the DevOps Agent space shortly after."
 echo "═══════════════════════════════════════════════════════════"

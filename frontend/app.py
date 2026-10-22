@@ -177,8 +177,8 @@ with st.sidebar:
     target = _resolve_target()
     if target is None:
         st.error(
-            "Orchestrator address not resolved. Run `infra/deploy.py` to "
-            "populate the SSM runtime-arns registry."
+            "Orchestrator address not resolved. Either run `infra/deploy.py` "
+            "(prod) or set `ORCHESTRATOR_LOCAL_URL` and launch `scripts/dev-local.sh`."
         )
         st.stop()
 

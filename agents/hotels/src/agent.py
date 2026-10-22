@@ -12,8 +12,6 @@ capacity change on `travel-concierge-hotels`), surfaced natively through
 `ProvisionedThroughputExceededException` on the DynamoDB span.
 """
 
-import otel_patch  # noqa: F401  must come BEFORE strands import
-
 import json
 
 

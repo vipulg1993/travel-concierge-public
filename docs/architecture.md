@@ -156,8 +156,7 @@ sets a single content-capture flag.
 
 | Env var | Value | Why |
 |---|---|---|
-| `AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT` | `true` | **The only OTel variable you set.** Keeps prompt and response text on the span (as GenAI events, per the OTel GenAI semantic conventions) so Omni's trace detail panel and the online evaluators can read them. Without it, AWS Distro 0.21+ extracts GenAI content to separate CloudWatch Logs event records, and the trace detail panel renders "No request or response content was captured". |
-| `OTEL_PYTHON_FASTAPI_EXCLUDED_URLS` | `invocations,ping` | Suppresses the FastAPI auto-instrumentor's SERVER span for the AgentCore endpoints. Not a telemetry setting — a trace-shape fix: without it, each invocation produces a ghost orphan root in the trace tree because the auto SERVER span's parent-id points at AgentCore's hidden dispatcher. Our `main.py` creates its own `sub_agent.invocation` span under the orchestrator's current context instead. |
+| `AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT` | `true` | **The only OTel variable you set.** Keeps prompt and response text on the span so Omni's trace detail panel and the online evaluators can read them. |
 | `AGENT_NAME` | `orchestrator` / `flights` / `weather` / `budget` | App-level, used by `main.py` for FastAPI title + logger prefix. |
 | `LOG_LEVEL` | `INFO` | App-level. |
 
@@ -491,11 +490,10 @@ travel-concierge/
 │   │   ├── requirements.txt           # strands-agents>=1.22, aws-opentelemetry-distro>=0.10.1
 │   │   └── src/
 │   │       ├── main.py                # FastAPI /invocations + /ping, SSE streaming
-│   │       ├── agent.py               # Strands Agent + 5 tools (incl. cross-cloud)
-│   │       └── otel_patch.py          # is_langfuse monkey-patch
-│   ├── flights/   src/{main.py, agent.py, otel_patch.py}
-│   ├── hotels/    src/{main.py, agent.py, otel_patch.py}  # same source powers both AgentCore and EKS deployments
-│   ├── weather/   src/{main.py, agent.py, otel_patch.py}
+│   │       └── agent.py               # Strands Agent + 5 tools (incl. cross-cloud)
+│   ├── flights/   src/{main.py, agent.py}
+│   ├── hotels/    src/{main.py, agent.py}  # same source powers the EKS deployment
+│   ├── weather/   src/{main.py, agent.py}
 │   └── budget/
 │       └── src/
 │           ├── main.py

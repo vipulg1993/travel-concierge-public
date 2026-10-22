@@ -6,8 +6,6 @@ in the OTel trace. The Lambda's own `AWS/Lambda.Duration` and `Errors` metrics
 are the native alarm sources (no custom instrumentation needed).
 """
 
-import otel_patch  # noqa: F401  must come BEFORE strands import
-
 import json
 
 

@@ -14,9 +14,11 @@
 #      grade NAT reserved range (100.64.0.0/10), which is aggressively
 #      filtered by many ISPs and corporate networks.
 #
-# All observability env vars (OTel, LANGFUSE_BASE_URL, OPT_OUT) match
-# the AgentCore runtime config so spans flow into the same Omni trace
-# tree with content attributes intact.
+# Content capture matches the AgentCore agents (single
+# AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true). The remaining OTel env
+# vars configure the OTLP wire — AgentCore injects those automatically,
+# but on EKS we declare them explicitly since there's no managed
+# runtime to do it.
 
 apiVersion: v1
 kind: Namespace
@@ -126,24 +128,6 @@ spec:
               value: "travel_concierge_hotels.eks"
             - name: OTEL_RESOURCE_ATTRIBUTES
               value: "service.name=travel_concierge_hotels.eks,aws.log.group.names=/aws/bedrock-agentcore/runtimes/travel_concierge_hotels-eks,cloud.platform=aws_eks,service.framework=strands,deployment.environment=eks-fargate"
-            # Standard gen_ai content capture flag (OTel semconv standard)
-            - name: OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
-              value: "true"
-            # Strands-specific gen_ai span emission knobs. Strands 1.35's
-            # OTel tracer only emits full gen_ai.* attributes (model, input/
-            # output messages, usage) when these are enabled AND it detects
-            # a Langfuse-style endpoint. We're not shipping to Langfuse;
-            # LANGFUSE_BASE_URL=langfuse is a value-check hack that flips
-            # Strands into the serialization mode where it attaches gen_ai
-            # attributes to the span, which is what Omni's trace UI reads.
-            - name: STRANDS_OTEL_ENABLE_CONTENT_TRACING
-              value: "true"
-            - name: STRANDS_OTEL_ENABLE_CONTENT_CAPTURE
-              value: "true"
-            - name: OTEL_SEMCONV_STABILITY_OPT_IN
-              value: "gen_ai_latest_experimental,gen_ai_tool_definitions"
-            - name: LANGFUSE_BASE_URL
-              value: "langfuse"
             # Keep OTel log + metric exporters off; pod logs flow via K8s log
             # driver, and we don't currently use OTel metrics.
             - name: OTEL_LOGS_EXPORTER

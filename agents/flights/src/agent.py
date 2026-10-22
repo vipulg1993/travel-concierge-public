@@ -12,8 +12,6 @@ changes (IAM policy on `travel-concierge-flights-role`), surfaced natively
 through `AccessDeniedException` on the DynamoDB span.
 """
 
-import otel_patch  # noqa: F401  must come BEFORE strands import
-
 import json
 
 

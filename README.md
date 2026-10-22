@@ -12,8 +12,8 @@ Transaction Search.
 ## What's in here
 
 - **5 Strands/CrewAI agents** on AgentCore Runtime (`agents/`), orchestrated
-  by a 6th. All share the same OTel instrumentation (`otel_patch.py`) and
-  FastAPI shell shape.
+  by a 6th. All share the same OTel instrumentation (AWS Distro + the
+  framework's native tracer) and FastAPI shell shape.
 - **2 remote specialists** off AgentCore to prove cross-platform
   interoperability (`remote-agents/`): hotels on EKS Fargate behind a
   Cloudflare tunnel, and activities on Google Cloud Run (two variants).
@@ -22,6 +22,9 @@ Transaction Search.
   5 AgentCore Runtimes, 5 ECR repos.
 - **Streamlit UI** (`frontend/app.py`) that invokes the orchestrator via
   `bedrock-agentcore:InvokeAgentRuntime`.
+- **Fault scenarios** (`scripts/scenario.sh`) that trigger real AWS
+  resource changes (not synthetic SSM flags) so Omni + the DevOps Agent
+  investigate a real failure mode.
 - **Docs** (`docs/`) covering architecture and telemetry ingestion.
 
 See `docs/architecture.md` for the full system picture and
@@ -58,7 +61,8 @@ export AWS_REGION=us-east-1
 - For `remote-agents/activities-{gcp,cloudrun}/`: `gcloud` + a GCP project
   with Cloud Run enabled
 
-Install Python deps once per agent (each has its own `requirements.txt`).
+Install Python deps once per agent (each has its own `requirements.txt`), or
+use the Phase B helper described below.
 
 ## Deploy to prod (AgentCore)
 
@@ -84,8 +88,76 @@ Kubernetes pod and an off-AWS activities pod):
 
 ```bash
 AWS_PROFILE=omni-demo AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID remote-agents/hotels-eks/deploy.sh
-# For activities: see remote-agents/activities-gcp/README.md
+# For activities: see remote-agents/activities-cloudrun/README.md
 ```
+
+## Run locally
+
+Local F2 topology — every agent runs as a plain Python process on your
+laptop; the orchestrator calls each specialist over plain HTTP; all 6
+processes export OTel spans to the Omni local collector. Local and prod
+produce the same trace tree, with one documented difference: the
+orchestrator→specialist hop appears as an HTTP client span locally and
+as a `bedrock-agentcore:InvokeAgentRuntime` SDK span in prod.
+
+Topology:
+
+```
+  Omni Kiro extension — "Test Agent" / Playground
+     │
+     ▼ POST /invocations (HTTP, SSE)
+  orchestrator :8080
+     ├──▶ flights    :8081   (Strands)
+     ├──▶ hotels     :8082   (Strands)
+     ├──▶ weather    :8083   (Strands)
+     ├──▶ budget     :8084   (CrewAI)
+     └──▶ activities :8085   (LangGraph; same code as remote-agents/activities-cloudrun)
+```
+
+Streamlit is NOT part of the local stack — invoke the local orchestrator
+from the Omni Kiro extension's Test Agent / Playground view against
+`http://127.0.0.1:8080`. Streamlit only runs against prod — see the next
+section.
+
+Prereqs:
+
+- Kiro IDE with the Omni extension running (so the local OTel collector
+  is up and `OTEL_EXPORTER_OTLP_ENDPOINT` is exported in the Omni-managed
+  terminal). The collector port is dynamic per Omni session; the dev-local
+  script will source `.env.omni` from the adjacent workspace if the env
+  var isn't already set.
+- `AWS_PROFILE=omni-demo` (or any profile with read access to the demo
+  account's DDB tables + weather Lambda).
+- `AWS_ACCOUNT_ID=<your 12-digit id>` exported.
+- A Python 3.12 venv activated.
+
+Commands:
+
+```bash
+# one-time dep install into the active venv
+scripts/dev-local-install.sh
+
+# start 6 agents; prints PIDs, pings every /ping
+AWS_PROFILE=omni-demo AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID scripts/dev-local.sh
+
+# Now invoke the orchestrator at http://127.0.0.1:8080 from the Omni Kiro
+# extension's Test Agent / Playground view. Traces land in local mode
+# Trace Explorer within seconds.
+
+# Ctrl-C stops everything cleanly (SIGINT trap). Or:
+scripts/dev-local-stop.sh
+```
+
+The script runs each agent under `opentelemetry-instrument uvicorn
+main:app …`, exporting the same `OTEL_*` and content-capture env vars
+`infra/deploy.py::_runtime_env` sets for prod — so spans line up with
+prod on `service.name`, `cloud.*`, and `gen_ai.*` attributes.
+
+The AgentCore prod path (`bedrock-agentcore:InvokeAgentRuntime`) remains
+the DEFAULT behaviour of `agents/orchestrator/src/agent.py` and
+`frontend/app.py`. Local mode is opt-in via `FLIGHTS_LOCAL_URL`,
+`HOTELS_LOCAL_URL`, `WEATHER_LOCAL_URL`, `BUDGET_LOCAL_URL`,
+`ACTIVITIES_LOCAL_URL` env vars — all set by `scripts/dev-local.sh`.
 
 ## Run the prod UI
 
@@ -100,6 +172,27 @@ AWS_PROFILE=omni-demo ./scripts/streamlit-prod.sh
 
 The script explicitly unsets `ORCHESTRATOR_LOCAL_URL` so the frontend
 takes the SSM/ARN path even if that env var is set elsewhere.
+
+## Fault scenarios
+
+Driven by `scripts/scenario.sh <A|B|D|E> <on|off|status>`. Each scenario
+changes a REAL AWS resource (no synthetic flags) and snapshots the prior
+state to `scripts/snapshots/` so `off` restores it bit-exact.
+
+| Scenario | Resource change                                              | Observable failure                                              |
+|----------|--------------------------------------------------------------|-----------------------------------------------------------------|
+| **A**    | Attach `Deny` on `dynamodb:GetItem` to the flights IAM role. | Flights spans fault with `AccessDeniedException`.               |
+| **B**    | Set the weather-provider Lambda's memory to 128 MB.          | AWS/Lambda `Duration` climbs; weather subtree widens.           |
+| **D**    | Set `DDB_REGION=us-west-2` on the flights AgentCore runtime. | Flights `dynamodb:GetItem` fails with region-mismatch deny.     |
+| **E**    | Flip `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false` on the hotels EKS pod. | Hotels chat spans arrive with no input/output content; other agents unaffected. |
+
+Example:
+
+```bash
+AWS_PROFILE=omni-demo AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID scripts/scenario.sh A on
+# ... exercise Streamlit → observe fault in Omni, run DevOps Agent ...
+AWS_PROFILE=omni-demo AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID scripts/scenario.sh A off
+```
 
 ## Docs
 

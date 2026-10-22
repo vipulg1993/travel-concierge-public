@@ -15,8 +15,6 @@ Trace shape (one request):
     └── gen_ai.chat (final synthesis)
 """
 
-import otel_patch  # noqa: F401  must come BEFORE strands import
-
 import json
 import logging
 import os
