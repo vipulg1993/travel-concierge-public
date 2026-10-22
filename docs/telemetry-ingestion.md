@@ -92,6 +92,18 @@ per-runtime log groups with `UNIFIED_TRACES_DESTINATION_ENABLED=true`.
 Same SDK as AgentCore, but **you wire every env var and IAM yourself**.
 Equivalent to running the AgentCore config "by hand".
 
+> The last five env vars in the block below
+> (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`,
+> `STRANDS_OTEL_ENABLE_CONTENT_TRACING`, `STRANDS_OTEL_ENABLE_CONTENT_CAPTURE`,
+> `OTEL_SEMCONV_STABILITY_OPT_IN`, `LANGFUSE_BASE_URL`) match a workaround
+> from Strands 1.35 that is no longer required with Strands ≥1.60 — the
+> single `AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true` is sufficient on
+> AgentCore (§2.1) and should be sufficient here too. They are kept in the
+> live manifest pending an EKS redeploy to validate; the EKS redeploy
+> rolls the Cloudflare quick-tunnel URL, so it must be paired with
+> `python3 infra/deploy.py --only orchestrator --skip-build` to refresh
+> the orchestrator's `HOTELS_EKS_URL`.
+
 **SDK:** `aws-opentelemetry-distro>=0.21.0` (ADOT)
 
 **Launch:** `CMD ["opentelemetry-instrument", "uvicorn", "main:app", ...]`

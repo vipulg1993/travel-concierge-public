@@ -28,9 +28,9 @@ produces a single stitched OpenTelemetry trace in Omni.
   (Transaction Search) / CloudWatch Omni via OTel W3C traceparent + AWS
   X-Ray trace header propagation
 - **CloudWatch Omni** visualizes the trace tree + agent topology
-- **AWS DevOps Agent** investigates failures surfaced through the unified
-  trace tree, correlating span errors with CloudWatch metrics and CloudTrail
-  events to identify root causes
+- **AWS DevOps Agent** investigates incidents produced by three fault scenarios
+  (IAM denial, Lambda memory squeeze, AgentCore env-var drift) that model
+  real-world production incidents
 
 AWS account: `<AWS_ACCOUNT_ID>`  |  Primary region: `us-east-1`
 EKS cluster: `travel-concierge` (Fargate-only, Kubernetes 1.31)
@@ -150,29 +150,33 @@ unified-trace shape without any extra container.
 
 ### 3.1 OTel environment variables (AgentCore agents)
 
-Set per-runtime at register time by `infra/deploy.py::_runtime_env()`. Shared by
-the 4 Strands + CrewAI agents on AgentCore (orchestrator, flights, weather, budget):
+Set per-runtime at register time by `infra/deploy.py::_runtime_env()`. On
+AgentCore + ADOT, the runtime manages the full OTel wiring; a developer
+sets a single content-capture flag.
 
 | Env var | Value | Why |
 |---|---|---|
-| `AGENT_OBSERVABILITY_ENABLED` | `true` | AWS Distro switch that enables the richer gen_ai instrumentation path and the OTLPAwsSpanExporter. |
-| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `true` | Standard OTel GenAI flag. Opt-in for prompt/response content capture (default is off for privacy). |
-| `STRANDS_OTEL_ENABLE_CONTENT_TRACING` | `true` | Strands' own flag — same semantics for Strands-emitted spans. |
-| `STRANDS_OTEL_ENABLE_CONTENT_CAPTURE` | `true` | Strands' companion flag. |
-| `OTEL_SEMCONV_STABILITY_OPT_IN` | `gen_ai_latest_experimental,gen_ai_tool_definitions` | Opt-in to the newer GenAI semantic conventions. Produces `gen_ai.input.messages` / `gen_ai.output.messages` (JSON arrays) and `gen_ai.tool.*` attributes that Omni's trace detail panel renders. |
-| `LANGFUSE_BASE_URL` | `langfuse` | Enables Strands' mirroring of GenAI events onto span attributes. Strands 1.35 gates this on `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or `LANGFUSE_BASE_URL` containing the substring `langfuse`. Setting this variable to the literal value `langfuse` flips the switch without routing any data to Langfuse. |
-| `AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT` | `true` | AWS Distro 0.21+ ships an LLO (Large Language Object) stripper that recognises `gen_ai.input.messages`/`gen_ai.output.messages`/`gen_ai.system_instructions`, extracts them to separate Gen-AI event logs, and removes them from the span before export to CloudWatch. Omni's trace viewer reads span attributes, so stripping produces "No request or response content was captured for this span". Opting out keeps content on the span attributes. |
-| `AWS_REGION` | `us-east-1` | Pinned by AgentCore to the runtime's own region. Setting it here is informational — AgentCore overrides it in the container regardless. |
-| `AGENT_NAME` | `orchestrator` / `flights` / `hotels` / `weather` / `budget` | Used by `main.py` for FastAPI title + logger prefix. |
-| `LOG_LEVEL` | `INFO` | Standard. |
+| `AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT` | `true` | **The only OTel variable you set.** Keeps prompt and response text on the span (as GenAI events, per the OTel GenAI semantic conventions) so Omni's trace detail panel and the online evaluators can read them. Without it, AWS Distro 0.21+ extracts GenAI content to separate CloudWatch Logs event records, and the trace detail panel renders "No request or response content was captured". |
+| `OTEL_PYTHON_FASTAPI_EXCLUDED_URLS` | `invocations,ping` | Suppresses the FastAPI auto-instrumentor's SERVER span for the AgentCore endpoints. Not a telemetry setting — a trace-shape fix: without it, each invocation produces a ghost orphan root in the trace tree because the auto SERVER span's parent-id points at AgentCore's hidden dispatcher. Our `main.py` creates its own `sub_agent.invocation` span under the orchestrator's current context instead. |
+| `AGENT_NAME` | `orchestrator` / `flights` / `weather` / `budget` | App-level, used by `main.py` for FastAPI title + logger prefix. |
+| `LOG_LEVEL` | `INFO` | App-level. |
+
+AgentCore injects `AGENT_OBSERVABILITY_ENABLED=true`, `OTEL_PYTHON_DISTRO`,
+`OTEL_PYTHON_CONFIGURATOR`, `OTEL_TRACES_EXPORTER`,
+`OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_RESOURCE_ATTRIBUTES`, `OTEL_PROPAGATORS`, and `AWS_REGION` on every
+deployment. Per the AWS
+[Send AI agent telemetry](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/omni-send-ai-agent-telemetry.html)
+guide, these managed defaults must not be duplicated in the runtime
+resource. Frameworks with native OpenTelemetry tracing (Strands Agents
+included) need no additional wiring.
 
 Orchestrator-only additions (injected at deploy time by `infra/deploy.py`):
 
 | Env var | Example | Purpose |
 |---|---|---|
 | `FLIGHTS_RUNTIME_ARN` | `arn:aws:bedrock-agentcore:us-east-1:...:runtime/travel_concierge_flights-72Yyav419R` | Wires the `search_flights` tool to the Flights specialist. |
-| `HOTELS_RUNTIME_ARN` | ... | `search_hotels` tool target — **AgentCore fallback only**. Used when `HOTELS_EKS_URL` is unset. |
-| `HOTELS_EKS_URL` | `https://dec-amy-burning-supplemental.trycloudflare.com` | `search_hotels` tool **primary target**. When set, the orchestrator calls the EKS Fargate pod via HTTPS instead of invoking the AgentCore runtime. Rotated on every EKS pod restart because the quick-tunnel URL is ephemeral. |
+| `HOTELS_EKS_URL` | `https://dec-amy-burning-supplemental.trycloudflare.com` | `search_hotels` tool target. The hotels specialist is EKS-only — the orchestrator reaches it over HTTPS via this URL. Rotated on every EKS pod restart because the Cloudflare quick-tunnel URL is ephemeral; a redeploy of `remote-agents/hotels-eks/deploy.sh` must be followed by `python3 infra/deploy.py --only orchestrator --skip-build` to refresh this env on the orchestrator. |
 | `WEATHER_RUNTIME_ARN` | ... | `check_weather` tool target. |
 | `BUDGET_RUNTIME_ARN` | ... | `estimate_budget` tool target. |
 | `ACTIVITIES_GCP_URL` | `https://activities-agent-fheafkmf4a-uc.a.run.app` | `recommend_activities` tool target (cross-cloud HTTPS). |
@@ -194,9 +198,10 @@ Flights-only additions (used by Scenario D fault injection):
 ### 3.1.1 OTel environment variables (EKS hotels pod)
 
 Set in `remote-agents/hotels-eks/manifests.yaml` on the `hotels` container.
-The eight content-capture env vars from §3.1 are the same (so span shape and
-`gen_ai.input.messages` / `gen_ai.output.messages` behave identically to the
-AgentCore agents). The additional ones that are specific to the EKS lane:
+Unlike AgentCore (which injects the OTel wire configuration for you), the
+EKS pod declares every OTel env var itself — same `AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true` content-capture
+flag plus the full OTLP wire setup. The additional ones specific to the
+EKS lane:
 
 | Env var | Value | Why |
 |---|---|---|
@@ -207,21 +212,17 @@ AgentCore agents). The additional ones that are specific to the EKS lane:
 | `OTEL_SERVICE_NAME` | `travel_concierge_hotels.eks` | Groups the EKS pod's spans distinctly from the AgentCore `travel_concierge_hotels.DEFAULT` runtime, so Omni's topology view shows them as two separate services. |
 | `OTEL_RESOURCE_ATTRIBUTES` | `cloud.platform=aws_eks,service.framework=strands,deployment.environment=eks-fargate` | Topology grouping and filterability in Omni. |
 
-### 3.2 Strands content-capture helper (`otel_patch.py`)
+### 3.2 Content capture
 
-Each Strands agent imports `otel_patch` before `strands`. The helper forces
-`Tracer.is_langfuse` to return `True`, so Strands mirrors every GenAI event
-onto span attributes — the shape Omni's trace detail panel reads for
-prompts and responses.
-
-```python
-from strands.telemetry.tracer import Tracer as _StrandsTracer
-_StrandsTracer.is_langfuse = property(lambda self: True)
-```
-
-The helper also registers a no-op `SpanProcessor` to keep the attribute
-pipeline stable under AWS Distro + Strands. Pair with `LANGFUSE_BASE_URL=langfuse`
-(§3.1) for a consistent result across restarts.
+Strands (specialists, orchestrator) and CrewAI (budget) both ship with OTel
+tracers that emit GenAI content natively when `AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true`
+is set (§3.1). Strands produces span **events** (`gen_ai.user.message`,
+`gen_ai.assistant.message`, `gen_ai.tool.message`, `gen_ai.choice`); CrewAI
+produces span **attributes** (`gen_ai.input.messages`, `gen_ai.output.messages`)
+via the ADOT-bundled CrewAI instrumentor. Omni's trace detail panel reads
+both forms interchangeably, so Input/Output renders identically for all
+specialists. No helper modules, no `is_langfuse` monkey-patch, no
+`OTEL_SEMCONV_STABILITY_OPT_IN` opt-in — the single env var is enough.
 
 ### 3.3 Trace propagation (how one request produces one trace)
 
@@ -461,7 +462,26 @@ Run start adds 10-20 s to the first request of the day.
 
 ---
 
-## 5. File map
+## 5. Fault scenarios (demo lane)
+
+Scripts in `scripts/scenario.sh` toggle three real AWS resource changes that
+drive natively-metered failures through the OTel trace. All three take a
+snapshot of pre-change state before applying so `off` restores exactly what
+was there.
+
+| Scenario | Target | Mechanism | Fault signature in trace |
+|---|---|---|---|
+| **A** | Flights role | `aws iam put-role-policy` adds an explicit `Deny` on `dynamodb:GetItem` to `travel-concierge-flights-role` | `AccessDeniedException` on the flights DDB span. CloudTrail: `PutRolePolicy` with the Deny statement. |
+| **B** | Weather Lambda | `aws lambda update-function-configuration --memory-size 128` | Elevated `AWS/Lambda.Duration`, `InitDuration` on cold starts. CloudTrail: `UpdateFunctionConfiguration`. |
+| **D** | Flights AgentCore runtime | `UpdateAgentRuntime` sets `DDB_REGION=us-west-2` env var | `AccessDeniedException` on the flights DDB span, with a us-west-2 ARN in the error (deeper red herring — role is unchanged). CloudTrail: `UpdateAgentRuntime`. |
+
+Each one has been validated end-to-end: fault captured in trace, DevOps
+Agent can walk the audit trail and identify the root cause. See
+`docs/trace-walkthrough.md` for the layer-by-layer Omni investigation path.
+
+---
+
+## 6. File map
 
 ```
 travel-concierge/
@@ -505,17 +525,21 @@ travel-concierge/
 │   ├── deploy.py                      # Builds ECR images, registers/updates AgentCore runtimes
 │   └── teardown.py                    # Full cleanup
 ├── scripts/
-│   └── streamlit-prod.sh              # Launches Streamlit against prod AgentCore
+│   ├── scenario.sh                    # A/B/D on/off/status with snapshots
+│   ├── smoketest.py                   # Fire one query against each agent directly
+│   ├── load_gen.py                    # N queries, M parallel, through orchestrator
+│   └── snapshots/                     # Pre-change state captured by scenario.sh
 ├── frontend/
 │   └── app.py                         # Streamlit chat UI, SSE drain, markdown sanitize
 └── docs/
     ├── architecture.md                # (this file)
-    └── telemetry-ingestion.md         # OTel configuration + trace stitching
+    ├── trace-walkthrough.md           # Layer-by-layer Omni trace tour
+    └── demo_script.md                 # 45-min demo talk track
 ```
 
 ---
 
-## 6. Deployment summary
+## 7. Deployment summary
 
 - Build + register all 5 AgentCore runtimes (the hotels AgentCore runtime is
   kept as a fallback — the EKS deployment takes precedence when
@@ -533,6 +557,8 @@ travel-concierge/
   `AWS_PROFILE=omni-demo python3 infra/deploy.py --only orchestrator --skip-build`
 - Launch frontend:
   `cd frontend && AWS_PROFILE=omni-demo streamlit run app.py --server.port 8501`
+- Fault toggles: `./scripts/scenario.sh A on`, `./scripts/scenario.sh B on`, `./scripts/scenario.sh D on`.
+
 Note: the Cloudflare quick-tunnel URL changes on every pod restart. If the
 EKS pod is recycled (image push, node reclaim, manifest apply), re-run
 `./remote-agents/hotels-eks/deploy.sh` followed by the orchestrator deploy
