@@ -2,16 +2,16 @@
 
 A multi-agent, multi-cloud, multi-framework, multi-compute travel-planning
 demo whose purpose is to stress-test CloudWatch Omni + AWS DevOps Agent
-against a realistic agentic workload. Each request fans out across six
-specialist agents hosted on **four** different compute platforms across
+against a realistic agentic workload. Each request fans out from the
+orchestrator to five specialist agents hosted on **four** different compute platforms across
 two cloud providers, backed by three different agent frameworks, and
 produces a single stitched OpenTelemetry trace in Omni.
 
 ![Travel Concierge architecture](./architecture.png)
 
-> The SVG source is at [`architecture.svg`](./architecture.svg) — edit it
-> directly to update boxes, arrows, or labels; regenerate the PNG with
-> `rsvg-convert -w 1800 architecture.svg -o architecture.png`.
+> The diagram is authored as an SVG and rendered to PNG with
+> `rsvg-convert -w 1800 architecture.svg -o architecture.png`. The SVG
+> source is maintained in the internal copy of this repo.
 
 ---
 
@@ -62,7 +62,7 @@ EKS cluster: `travel-concierge` (Fargate-only, Kubernetes 1.31)
 |---|---|---|
 | `travel-concierge-orchestrator-role` | Orchestrator runtime | Bedrock InvokeModel on Sonnet 4, `bedrock-agentcore:InvokeAgentRuntime` on the four specialist runtimes, SSM read on `/travel-concierge/*`, logs/xray write. |
 | `travel-concierge-flights-role` | Flights runtime | Bedrock InvokeModel, DynamoDB GetItem on `travel-concierge-flights` (us-east-1 ARN), logs/xray write. |
-| `travel-concierge-hotels-role` | Hotels runtime (fallback only — EKS pod is now primary) | Bedrock InvokeModel, DynamoDB GetItem on `travel-concierge-hotels`, logs/xray write. |
+| `travel-concierge-hotels-role` | (unused at runtime — kept for the EKS teardown path) | Historically attached to an AgentCore hotels fallback runtime; removed in favor of EKS-only hotels. Safe to delete when the demo is torn down. |
 | `travel-concierge-hotels-eks-role` | **EKS hotels pod** (IRSA, bound to `hotels/hotels` ServiceAccount via OIDC) | DynamoDB GetItem on `travel-concierge-hotels`, Bedrock Converse, X-Ray `PutTraceSegments` / `PutSpans`. |
 | `travel-concierge-weather-role` | Weather runtime | Bedrock InvokeModel, `lambda:InvokeFunction` on weather provider, logs/xray write. |
 | `travel-concierge-budget-role` | Budget runtime | Bedrock InvokeModel, SSM read for prompt variant, logs/xray write. |
@@ -73,7 +73,7 @@ EKS cluster: `travel-concierge` (Fargate-only, Kubernetes 1.31)
 
 | Parameter | Purpose |
 |---|---|
-| `/travel-concierge/runtime-arns/{orchestrator,flights,hotels,weather,budget}` | AgentCore runtime ARN registry. Looked up by the orchestrator at deploy to wire specialist tools, and by the Streamlit frontend to find the orchestrator. |
+| `/travel-concierge/runtime-arns/{orchestrator,flights,weather,budget}` | AgentCore runtime ARN registry. Looked up by the orchestrator at deploy to wire specialist tools, and by the Streamlit frontend to find the orchestrator. Hotels is intentionally absent — the hotels specialist runs on EKS Fargate, reachable via `HOTELS_EKS_URL` (next row). |
 | `/travel-concierge/weather-provider-url` | Weather Lambda Function URL (fallback path for the weather specialist). |
 | `/travel-concierge/remote-agents/activities-gcp-url` | Cloud Run service URL for the activities specialist. Injected into the orchestrator at deploy time. |
 | `/travel-concierge/remote-agents/hotels-eks-url` | Cloudflare Tunnel URL for the EKS hotels pod (e.g. `https://*.trycloudflare.com`). Injected into the orchestrator as `HOTELS_EKS_URL` at deploy time. Rotated on every pod restart because the quick-tunnel URL is ephemeral — see §3.5. |
@@ -501,47 +501,54 @@ travel-concierge/
 │           └── policies.py            # Reads /travel-concierge/policies/budget/prompt_variant
 ├── remote-agents/
 │   ├── activities-cloudrun/           # GCP Cloud Run (activities, LangGraph)
-│   │   ├── Dockerfile                 # python:3.12-slim + otelcol-contrib binary
-│   │   ├── requirements.txt           # langgraph>=0.6, opentelemetry-sdk, instrumentors
-│   │   ├── collector-config.yaml      # sigv4auth + otlphttp exporter → us-east-1 CloudWatch OTLP
-│   │   ├── start.sh                   # Launches collector (bg) + FastAPI app (fg)
+│   │   ├── Dockerfile                 # python:3.12-slim (no Collector sidecar)
+│   │   ├── requirements.txt           # langgraph, opentelemetry-sdk + instrumentors, boto3
 │   │   ├── app.py                     # LangGraph 2-node graph + manual gen_ai attrs
-│   │   ├── otel_setup.py              # TracerProvider + CompositePropagator + instrumentors
-│   │   └── deploy.sh                  # gcloud run deploy --source . with env secrets
+│   │   ├── otel_setup.py              # TracerProvider + SigV4Session + CompositePropagator
+│   │   ├── deploy.sh                  # gcloud run deploy --source . with env + secrets
+│   │   └── README.md
 │   └── hotels-eks/                    # AWS EKS Fargate (hotels, Strands)
 │       ├── cluster.yaml               # eksctl cluster spec (Fargate-only, OIDC, K8s 1.31)
 │       ├── iam-policy.json            # IRSA role policy (DDB GetItem + Bedrock + X-Ray)
-│       ├── collector-config.yaml      # sigv4auth + otlphttp exporter → us-east-1 CloudWatch OTLP
-│       ├── manifests.yaml             # Namespace + SA + ConfigMap + Deployment (3 containers)
+│       ├── manifests.yaml             # Namespace + SA + Deployment (2 containers: hotels + cloudflared)
 │       ├── deploy.sh                  # Build hotels image + apply manifests + extract tunnel URL to SSM
 │       ├── teardown.sh                # Delete namespace (keeps cluster for future re-use)
 │       └── README.md                  # Cloudflare Tunnel rationale + stable-URL swap recipe
 ├── infra/
-│   ├── _shared.py                     # ACCOUNT, REGION, resource names, role names
+│   ├── _config.py                     # ACCOUNT_ID + REGION + feature flags
+│   ├── _shared.py                     # Resource names, role names, boto session
 │   ├── setup.py                       # Creates IAM roles, DDB tables, Lambda, SSM params
 │   ├── seed_data.py                   # Loads 10 destinations × 8 options into DDB
 │   ├── deploy.py                      # Builds ECR images, registers/updates AgentCore runtimes
-│   └── teardown.py                    # Full cleanup
+│   ├── teardown.py                    # Full cleanup
+│   └── ops-automation/                # DevOps Agent alarm → investigation Lambda
+│       ├── lambda_handler.py
+│       ├── deploy.sh
+│       └── teardown.sh
 ├── scripts/
-│   ├── scenario.sh                    # A/B/D on/off/status with snapshots
-│   ├── smoketest.py                   # Fire one query against each agent directly
-│   ├── load_gen.py                    # N queries, M parallel, through orchestrator
+│   ├── dev-local-install.sh           # One-shot pip install for all 6 agents
+│   ├── dev-local.sh                   # Start the 6-process local stack
+│   ├── dev-local-stop.sh              # Stop the local stack
+│   ├── streamlit-prod.sh              # Launch Streamlit against prod AgentCore
+│   ├── scenario.sh                    # A/B/D fault injection toggles + snapshots
+│   ├── get_fault_trace.sh             # Find a recent fault trace for DevOps Agent
 │   └── snapshots/                     # Pre-change state captured by scenario.sh
 ├── frontend/
 │   └── app.py                         # Streamlit chat UI, SSE drain, markdown sanitize
 └── docs/
     ├── architecture.md                # (this file)
-    ├── trace-walkthrough.md           # Layer-by-layer Omni trace tour
-    └── demo_script.md                 # 45-min demo talk track
+    ├── architecture.png / .svg        # The architecture diagram above
+    ├── architecture-overview.png / .svg # Simplified overview for the README
+    └── telemetry-ingestion.md / .png / .svg # Deep reference for the OTel ingestion path
 ```
 
 ---
 
 ## 7. Deployment summary
 
-- Build + register all 5 AgentCore runtimes (the hotels AgentCore runtime is
-  kept as a fallback — the EKS deployment takes precedence when
-  `HOTELS_EKS_URL` is set):
+- Build + register all 4 AgentCore runtimes (orchestrator + flights, weather,
+  budget). The hotels specialist is EKS-only and is deployed separately
+  below:
   `AWS_PROFILE=omni-demo python3 infra/deploy.py`
 - Create the EKS Fargate cluster (one-time, ~15 min):
   `AWS_PROFILE=omni-demo eksctl create cluster -f remote-agents/hotels-eks/cluster.yaml`

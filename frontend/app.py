@@ -228,7 +228,7 @@ if "messages" not in st.session_state:
 st.title("✈️ Travel Concierge")
 st.caption(
     "A multi-agent travel-planning demo on AgentCore Runtime. "
-    "Each request fans out to 4 specialist agents (Flights, Hotels, Weather, Budget). "
+    "Each request fans out to 5 specialist agents (Flights, Hotels, Weather, Budget, Activities). "
     "Watch the trace in CloudWatch Omni."
 )
 
