@@ -1,11 +1,10 @@
 # Travel Concierge — End-to-End Architecture
 
-A multi-agent, multi-cloud, multi-framework, multi-compute travel-planning
-demo whose purpose is to stress-test CloudWatch Omni + AWS DevOps Agent
-against a realistic agentic workload. Each request fans out from the
-orchestrator to five specialist agents hosted on **four** different compute platforms across
-two cloud providers, backed by three different agent frameworks, and
-produces a single stitched OpenTelemetry trace in Omni.
+A multi-agent travel-planning app for CloudWatch Omni and the AWS DevOps
+Agent. An orchestrator fans out to five specialist agents hosted across
+three compute environments (AgentCore Runtime, EKS Fargate, Cloud Run),
+two clouds (AWS, GCP), and three frameworks (Strands, CrewAI, LangGraph),
+producing one stitched OpenTelemetry trace per request.
 
 ![Travel Concierge architecture](./architecture.png)
 
@@ -19,18 +18,17 @@ produces a single stitched OpenTelemetry trace in Omni.
 
 - **1 orchestrator** + **5 specialist agents** = 6 agents total
 - **2 cloud providers**: AWS (5 agents) + GCP (1 agent)
-- **4 compute platforms**: AgentCore Runtime (4 agents) + EKS Fargate
-  (1 agent) + Cloud Run (1 agent) + Lambda (weather provider)
+- **3 agent compute environments**: AgentCore Runtime (4 agents) + EKS
+  Fargate (1 agent) + Cloud Run (1 agent)
 - **3 agent frameworks**: Strands, CrewAI, LangGraph
-- **1 user-facing Lambda** (weather provider) + **2 DynamoDB tables**
-  (flights/hotels) + **1 Streamlit frontend**
+- **Backend data layer**: 1 Lambda (weather provider), 2 DynamoDB tables
+  (flights, hotels), 1 Streamlit frontend
 - **1 unified trace per request**, stitched end-to-end into CloudWatch
   (Transaction Search) / CloudWatch Omni via OTel W3C traceparent + AWS
   X-Ray trace header propagation
 - **CloudWatch Omni** visualizes the trace tree + agent topology
-- **AWS DevOps Agent** investigates incidents produced by three fault scenarios
-  (IAM denial, Lambda memory squeeze, AgentCore env-var drift) that model
-  real-world production incidents
+- **AWS DevOps Agent** investigates incidents produced by three fault
+  scenarios: IAM denial, Lambda memory squeeze, AgentCore env-var drift
 
 AWS account: `<AWS_ACCOUNT_ID>`  |  Primary region: `us-east-1`
 EKS cluster: `travel-concierge` (Fargate-only, Kubernetes 1.31)
@@ -62,7 +60,7 @@ EKS cluster: `travel-concierge` (Fargate-only, Kubernetes 1.31)
 |---|---|---|
 | `travel-concierge-orchestrator-role` | Orchestrator runtime | Bedrock InvokeModel on Sonnet 4, `bedrock-agentcore:InvokeAgentRuntime` on the four specialist runtimes, SSM read on `/travel-concierge/*`, logs/xray write. |
 | `travel-concierge-flights-role` | Flights runtime | Bedrock InvokeModel, DynamoDB GetItem on `travel-concierge-flights` (us-east-1 ARN), logs/xray write. |
-| `travel-concierge-hotels-role` | (unused at runtime — kept for the EKS teardown path) | Historically attached to an AgentCore hotels fallback runtime; removed in favor of EKS-only hotels. Safe to delete when the demo is torn down. |
+| `travel-concierge-hotels-role` | (created by setup.py; no agent runtime attached) | DynamoDB GetItem on `travel-concierge-hotels`, Bedrock InvokeModel, logs/xray write. |
 | `travel-concierge-hotels-eks-role` | **EKS hotels pod** (IRSA, bound to `hotels/hotels` ServiceAccount via OIDC) | DynamoDB GetItem on `travel-concierge-hotels`, Bedrock Converse, X-Ray `PutTraceSegments` / `PutSpans`. |
 | `travel-concierge-weather-role` | Weather runtime | Bedrock InvokeModel, `lambda:InvokeFunction` on weather provider, logs/xray write. |
 | `travel-concierge-budget-role` | Budget runtime | Bedrock InvokeModel, SSM read for prompt variant, logs/xray write. |
@@ -73,7 +71,7 @@ EKS cluster: `travel-concierge` (Fargate-only, Kubernetes 1.31)
 
 | Parameter | Purpose |
 |---|---|
-| `/travel-concierge/runtime-arns/{orchestrator,flights,weather,budget}` | AgentCore runtime ARN registry. Looked up by the orchestrator at deploy to wire specialist tools, and by the Streamlit frontend to find the orchestrator. Hotels is intentionally absent — the hotels specialist runs on EKS Fargate, reachable via `HOTELS_EKS_URL` (next row). |
+| `/travel-concierge/runtime-arns/{orchestrator,flights,weather,budget}` | AgentCore runtime ARN registry. Looked up by the orchestrator at deploy to wire specialist tools, and by the Streamlit frontend to find the orchestrator. The hotels specialist runs on EKS Fargate — see `HOTELS_EKS_URL` below. |
 | `/travel-concierge/weather-provider-url` | Weather Lambda Function URL (fallback path for the weather specialist). |
 | `/travel-concierge/remote-agents/activities-gcp-url` | Cloud Run service URL for the activities specialist. Injected into the orchestrator at deploy time. |
 | `/travel-concierge/remote-agents/hotels-eks-url` | Cloudflare Tunnel URL for the EKS hotels pod (e.g. `https://*.trycloudflare.com`). Injected into the orchestrator as `HOTELS_EKS_URL` at deploy time. Rotated on every pod restart because the quick-tunnel URL is ephemeral — see §3.5. |

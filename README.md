@@ -1,40 +1,24 @@
 # Travel Concierge
 
-A multi-cloud, multi-framework travel planner that stress-tests
-**CloudWatch Omni** and the **AWS DevOps Agent** against a realistic
-agentic workload — one that explicitly isn't all AgentCore.
-
-- **4 compute platforms** — AWS Bedrock AgentCore Runtime (orchestrator,
-  flights, weather, budget), **AWS EKS Fargate** (hotels), **GCP Cloud Run**
-  (activities), and AWS Lambda (weather data provider).
-- **2 clouds** — AWS primary, GCP for the activities specialist to prove
-  cross-cloud trace stitching.
-- **3 agent frameworks** — **Strands** (orchestrator + 3 specialists),
-  **CrewAI** (budget, 2-agent crew), **LangGraph** (activities, 2-node graph).
-- **1 unified OpenTelemetry trace per request**, stitched end-to-end across
-  AgentCore `InvokeAgentRuntime` SDK calls, HTTPS over a Cloudflare quick
-  tunnel into the EKS pod, cross-cloud HTTPS to Cloud Run, and the Lambda
-  weather call — all landing in CloudWatch Transaction Search for the Omni
-  UI and the DevOps Agent to read.
-
-The point of the demo is to show that Omni + DevOps Agent work against
-whatever compute shape an AI agent happens to run on today, not just
-AgentCore. A Streamlit UI drives the orchestrator; every hop below it
-produces a span that nests cleanly in one trace.
+A **multi-agent travel-concierge application** where agents are hosted
+on **multi-cloud** (AWS and GCP), **multi-environment** (EKS Fargate,
+AgentCore Runtime, Cloud Run), and **multi-framework** (Strands, CrewAI,
+LangGraph). Every request produces a single OpenTelemetry trace stitched
+across every cloud, every environment, every framework, and lands in
+**CloudWatch Omni**.
 
 ![Overview](docs/architecture-overview.png)
 
 ## What's in here
 
-- **5 Strands/CrewAI agents** on AgentCore Runtime (`agents/`), orchestrated
-  by a 6th. All share the same OTel instrumentation (AWS Distro + the
-  framework's native tracer) and FastAPI shell shape.
-- **2 remote specialists** off AgentCore to prove cross-platform
-  interoperability (`remote-agents/`): hotels on EKS Fargate behind a
-  Cloudflare tunnel, and activities on Google Cloud Run (two variants).
-- **Infra scripts** (`infra/`) that stand up / tear down the whole
-  workload: 5 IAM roles, 2 DynamoDB tables, 1 Lambda weather provider,
-  5 AgentCore Runtimes, 5 ECR repos.
+- **4 agents on AgentCore Runtime** (`agents/`): orchestrator (Strands),
+  flights, weather (Strands), budget (CrewAI). AWS Distro + the framework's
+  native OTel tracer; shared FastAPI shell.
+- **2 agents off AgentCore** (`remote-agents/`): hotels on AWS EKS Fargate
+  behind a Cloudflare tunnel, activities on GCP Cloud Run.
+- **Infra scripts** (`infra/`) that stand up / tear down the AgentCore
+  side of the workload: IAM roles, DynamoDB tables, Lambda weather
+  provider, 4 AgentCore Runtimes, 4 ECR repos.
 - **Streamlit UI** (`frontend/app.py`) that invokes the orchestrator via
   `bedrock-agentcore:InvokeAgentRuntime`.
 - **Fault scenarios** (`scripts/scenario.sh`) that trigger real AWS
