@@ -1,11 +1,26 @@
 # Travel Concierge
 
-A multi-agent travel planner that demonstrates **AWS Bedrock AgentCore Runtime**
-alongside **CloudWatch Omni** and the **AWS DevOps Agent**. One Streamlit UI
-drives an orchestrator that fans out to five specialist agents (flights,
-hotels, weather, budget, activities) — each independently deployable — and
-emits a unified OpenTelemetry trace tree that lands in CloudWatch
-Transaction Search.
+A multi-cloud, multi-framework travel planner that stress-tests
+**CloudWatch Omni** and the **AWS DevOps Agent** against a realistic
+agentic workload — one that explicitly isn't all AgentCore.
+
+- **4 compute platforms** — AWS Bedrock AgentCore Runtime (orchestrator,
+  flights, weather, budget), **AWS EKS Fargate** (hotels), **GCP Cloud Run**
+  (activities), and AWS Lambda (weather data provider).
+- **2 clouds** — AWS primary, GCP for the activities specialist to prove
+  cross-cloud trace stitching.
+- **3 agent frameworks** — **Strands** (orchestrator + 3 specialists),
+  **CrewAI** (budget, 2-agent crew), **LangGraph** (activities, 2-node graph).
+- **1 unified OpenTelemetry trace per request**, stitched end-to-end across
+  AgentCore `InvokeAgentRuntime` SDK calls, HTTPS over a Cloudflare quick
+  tunnel into the EKS pod, cross-cloud HTTPS to Cloud Run, and the Lambda
+  weather call — all landing in CloudWatch Transaction Search for the Omni
+  UI and the DevOps Agent to read.
+
+The point of the demo is to show that Omni + DevOps Agent work against
+whatever compute shape an AI agent happens to run on today, not just
+AgentCore. A Streamlit UI drives the orchestrator; every hop below it
+produces a span that nests cleanly in one trace.
 
 ![Overview](docs/architecture-overview.png)
 
