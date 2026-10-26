@@ -7,12 +7,8 @@ are the native alarm sources (no custom instrumentation needed).
 """
 
 import json
-
-
 import logging
 import os
-import urllib.error
-import urllib.request
 
 import boto3
 from strands import Agent, tool
@@ -24,7 +20,6 @@ REGION = os.environ.get("AWS_REGION", "us-east-1")
 MODEL_ID = os.environ.get(
     "MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 )
-WEATHER_PROVIDER_URL = os.environ.get("WEATHER_PROVIDER_URL", "")
 WEATHER_PROVIDER_FN = os.environ.get(
     "WEATHER_PROVIDER_FN", "travel-concierge-weather-provider"
 )
@@ -33,54 +28,31 @@ _lambda = boto3.client("lambda", region_name=REGION)
 
 
 def _call_weather_provider(destination: str, dates: str) -> dict:
-    """Fetch a forecast from the weather-provider Lambda.
+    """Fetch a forecast from the weather-provider Lambda via direct SDK invoke.
 
-    Prefers direct Lambda invoke (produces `aws.lambda.invoke` span). Falls
-    back to the Function URL (produces `http.client` span) if direct invoke
-    permission is missing.
+    Produces an `aws.lambda.invoke` span on the trace. Requires the weather
+    role to have `lambda:InvokeFunction` on this function (granted in
+    `infra/setup.py`).
     """
     payload = {"destination": destination, "dates": dates}
     body = json.dumps(payload).encode("utf-8")
 
-    try:
-        resp = _lambda.invoke(
-            FunctionName=WEATHER_PROVIDER_FN,
-            InvocationType="RequestResponse",
-            Payload=body,
+    resp = _lambda.invoke(
+        FunctionName=WEATHER_PROVIDER_FN,
+        InvocationType="RequestResponse",
+        Payload=body,
+    )
+    data = json.loads(resp["Payload"].read().decode("utf-8"))
+    if "errorMessage" in data:
+        raise RuntimeError(
+            f"weather-provider lambda error: {data['errorMessage']}"
         )
-        data = json.loads(resp["Payload"].read().decode("utf-8"))
-        if "errorMessage" in data:
-            raise RuntimeError(
-                f"weather-provider lambda error: {data['errorMessage']}"
-            )
-        if isinstance(data, dict) and "body" in data and "statusCode" in data:
-            try:
-                return json.loads(data["body"])
-            except Exception:
-                return {"raw": data["body"]}
-        return data
-    except Exception as lambda_err:
-        if not WEATHER_PROVIDER_URL:
-            raise
-        req = urllib.request.Request(
-            WEATHER_PROVIDER_URL,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+    if isinstance(data, dict) and "body" in data and "statusCode" in data:
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(
-                f"weather-provider Lambda failed ({lambda_err}); HTTP fallback "
-                f"got {e.code}: {e.read()[:200].decode('utf-8', 'ignore')}"
-            )
-        except urllib.error.URLError as e:
-            raise RuntimeError(
-                f"weather-provider Lambda failed ({lambda_err}); HTTP fallback "
-                f"URL error: {e.reason}"
-            )
+            return json.loads(data["body"])
+        except Exception:
+            return {"raw": data["body"]}
+    return data
 
 
 @tool

@@ -33,7 +33,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _shared import (  # noqa: E402
     ACCOUNT,
     MOCK_WEATHER_FN,
-    MOCK_WEATHER_URL_PARAM,
     REGION,
     ROLE_FOR_AGENT,
     RUNTIME_ARN_PREFIX,
@@ -71,13 +70,15 @@ RUNTIME_NAMES = {a: f"travel_concierge_{a}" for a in AGENT_ORDER}
 
 def _run(cmd: list, env: dict = None, cwd: Path = None, check: bool = True) -> subprocess.CompletedProcess:
     log.info("$ %s", " ".join(cmd))
-    return subprocess.run(cmd, cwd=cwd, env=env or os.environ.copy(), check=check)
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use.dangerous-subprocess-use
+    return subprocess.run(cmd, cwd=cwd, env=env or os.environ.copy(), check=check)  # nosec B603 - cmd is a fixed list built from internal constants (image tags, ECR repo names, finch/docker tool names); no user input flows in
 
 
 def _build_tool() -> str:
     for t in ("finch", "docker"):
         try:
-            subprocess.run([t, "--version"], check=True, capture_output=True)
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use.dangerous-subprocess-use
+            subprocess.run([t, "--version"], check=True, capture_output=True)  # nosec B603 - t is a hardcoded tool name ("finch" or "docker")
             return t
         except (FileNotFoundError, subprocess.CalledProcessError):
             continue
@@ -111,7 +112,8 @@ def ecr_login(builder: str) -> None:
     endpoint = tok["proxyEndpoint"]
     host = endpoint.replace("https://", "")
     log.info("$ %s login --username AWS --password-stdin %s", builder, host)
-    subprocess.run(
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use.dangerous-subprocess-use
+    subprocess.run(  # nosec B603 - builder/host come from an authenticated ECR authorization token; no shell=True; no user input
         [builder, "login", "--username", "AWS", "--password-stdin", host],
         input=password.encode("utf-8"),
         check=True,
@@ -249,13 +251,10 @@ def _runtime_env(agent: str) -> dict:
             env["TC_DISABLE_ACTIVITIES"] = "true"
             log.info("TC_DISABLE_ACTIVITIES=true — orchestrator will skip GCP activities tool")
     if agent == "weather":
-        # Pass the mock weather Function URL
-        try:
-            url = ssm.get_parameter(Name=MOCK_WEATHER_URL_PARAM)["Parameter"]["Value"]
-            env["MOCK_WEATHER_URL"] = url
-            env["MOCK_WEATHER_FN"] = MOCK_WEATHER_FN
-        except ssm.exceptions.ParameterNotFound:
-            log.warning("mock-weather URL not in SSM; weather agent will fall back to Lambda invoke")
+        # The weather specialist invokes the backing Lambda directly via boto3
+        # (`lambda:InvokeFunction`, SigV4). WEATHER_PROVIDER_FN tells it which
+        # function to call.
+        env["WEATHER_PROVIDER_FN"] = MOCK_WEATHER_FN
     return env
 
 

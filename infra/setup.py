@@ -32,7 +32,6 @@ from _shared import (  # noqa: E402
     FLIGHTS_TABLE,
     HOTELS_TABLE,
     WEATHER_PROVIDER_FN,
-    WEATHER_PROVIDER_URL_PARAM,
     POLICIES,
     POLICY_PREFIX,
     REGION,
@@ -284,35 +283,11 @@ def ensure_weather_provider() -> str:
                     continue
                 raise
 
-    # Function URL (public, demo-only)
-    try:
-        url = lam.get_function_url_config(FunctionName=WEATHER_PROVIDER_FN)["FunctionUrl"]
-    except lam.exceptions.ResourceNotFoundException:
-        url = lam.create_function_url_config(
-            FunctionName=WEATHER_PROVIDER_FN, AuthType="NONE"
-        )["FunctionUrl"]
-        # Permission for public invoke
-        try:
-            lam.add_permission(
-                FunctionName=WEATHER_PROVIDER_FN,
-                StatementId="FunctionUrlPublicAccess",
-                Action="lambda:InvokeFunctionUrl",
-                Principal="*",
-                FunctionUrlAuthType="NONE",
-            )
-        except lam.exceptions.ResourceConflictException:
-            pass
-    log.info("weather-provider function URL: %s", url)
-
-    # Store URL in SSM for weather agent to pick up (and setup can write it to env on deploy)
-    ssm.put_parameter(
-        Name=WEATHER_PROVIDER_URL_PARAM,
-        Value=url,
-        Type="String",
-        Description="Function URL of the weather-provider Lambda",
-        Overwrite=True,
-    )
-    return url
+    # The weather specialist calls this Lambda via `lambda:InvokeFunction`
+    # (direct SigV4-authenticated SDK invoke). No public Function URL is
+    # provisioned — the weather role is granted `lambda:InvokeFunction` on
+    # exactly this function (see IAM policy).
+    return None
 
 
 # ------------------------------------------------------------ IAM ROLES PER AGENT
@@ -473,15 +448,8 @@ IAM_POLICIES: dict = {
             BEDROCK_INFERENCE_POLICY,
             {
                 "Effect": "Allow",
-                "Action": ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl"],
+                "Action": ["lambda:InvokeFunction"],
                 "Resource": f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:{WEATHER_PROVIDER_FN}",
-            },
-            # Still allowed to read the weather-provider URL from SSM for the
-            # Function URL fallback path.
-            {
-                "Effect": "Allow",
-                "Action": ["ssm:GetParameter"],
-                "Resource": f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{WEATHER_PROVIDER_URL_PARAM}",
             },
         ],
     },

@@ -7,6 +7,10 @@ LangGraph). Every request produces a single OpenTelemetry trace stitched
 across every cloud, every environment, every framework, and lands in
 **CloudWatch Omni**.
 
+> **This is sample code, for non-production usage.** You should work with
+> your security and legal teams to meet your organizational security,
+> regulatory, and compliance requirements before deployment.
+
 ![Overview](docs/architecture-overview.png)
 
 ## What's in here
@@ -35,7 +39,7 @@ Every infra command and the EKS deploy script read these:
 
 | Variable          | Required | Example                 | Notes                                                      |
 |-------------------|----------|-------------------------|------------------------------------------------------------|
-| `AWS_PROFILE`     | yes      | `omni-demo`             | Any profile with admin on the demo account.                |
+| `AWS_PROFILE`     | yes      | `omni-demo`             | Profile for the demo account. `infra/setup.py`, `infra/seed_data.py`, and `infra/deploy.py` need IAM, Lambda, DynamoDB, SSM, ECR, Bedrock, `bedrock-agentcore`, and STS permissions. The sample uses an administrator-equivalent profile for simplicity. For production, scope to least privilege. |
 | `AWS_ACCOUNT_ID`  | yes      | `123456789012`          | Your 12-digit account id. Scripts fail loudly if unset.    |
 | `AWS_REGION`      | no       | `us-east-1` (default)   | Primary region for every AWS resource.                     |
 
