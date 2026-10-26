@@ -39,7 +39,7 @@ Every infra command and the EKS deploy script read these:
 
 | Variable          | Required | Example                 | Notes                                                      |
 |-------------------|----------|-------------------------|------------------------------------------------------------|
-| `AWS_PROFILE`     | yes      | `omni-demo`             | Profile for the demo account. `infra/setup.py`, `infra/seed_data.py`, and `infra/deploy.py` need IAM, Lambda, DynamoDB, SSM, ECR, Bedrock, `bedrock-agentcore`, and STS permissions. The sample uses an administrator-equivalent profile for simplicity. For production, scope to least privilege. |
+| `AWS_PROFILE`     | yes      | `omni-demo`             | Profile used ONLY to bootstrap the demo account (one-time run of `infra/setup.py` + `infra/seed_data.py` + `infra/deploy.py`). Bootstrap needs IAM, Lambda, DynamoDB, SSM, ECR, Bedrock, `bedrock-agentcore`, STS permissions — the sample uses an administrator-equivalent profile for that one-off bootstrap only. **The deployed agents do NOT run as this profile**: each agent runtime (orchestrator, flights, hotels, weather, budget) is attached to its own least-privilege IAM role created by `infra/setup.py`. Those per-agent roles are the authoritative least-privilege policies; see `ROLE_FOR_AGENT` and the `POLICIES` dict in `infra/setup.py` for the exact statements. |
 | `AWS_ACCOUNT_ID`  | yes      | `123456789012`          | Your 12-digit account id. Scripts fail loudly if unset.    |
 | `AWS_REGION`      | no       | `us-east-1` (default)   | Primary region for every AWS resource.                     |
 
