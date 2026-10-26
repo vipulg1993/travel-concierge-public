@@ -27,8 +27,9 @@ producing one stitched OpenTelemetry trace per request.
   (Transaction Search) / CloudWatch Omni via OTel W3C traceparent + AWS
   X-Ray trace header propagation
 - **CloudWatch Omni** visualizes the trace tree + agent topology
-- **AWS DevOps Agent** investigates incidents produced by three fault
-  scenarios: IAM denial, Lambda memory squeeze, AgentCore env-var drift
+- **AWS DevOps Agent** investigates fault classes visible in the trace
+  (IAM denials, Lambda saturation, AgentCore configuration drift) and
+  surfaces root cause from the OTel + CloudTrail evidence
 
 AWS account: `<AWS_ACCOUNT_ID>`  |  Primary region: `us-east-1`
 EKS cluster: `travel-concierge` (Fargate-only, Kubernetes 1.31)
@@ -75,7 +76,7 @@ EKS cluster: `travel-concierge` (Fargate-only, Kubernetes 1.31)
 | `/travel-concierge/weather-provider-url` | Weather Lambda Function URL (fallback path for the weather specialist). |
 | `/travel-concierge/remote-agents/activities-gcp-url` | Cloud Run service URL for the activities specialist. Injected into the orchestrator at deploy time. |
 | `/travel-concierge/remote-agents/hotels-eks-url` | Cloudflare Tunnel URL for the EKS hotels pod (e.g. `https://*.trycloudflare.com`). Injected into the orchestrator as `HOTELS_EKS_URL` at deploy time. Rotated on every pod restart because the quick-tunnel URL is ephemeral — see §3.5. |
-| `/travel-concierge/policies/budget/prompt_variant` | `"stable"` or `"regressed"` — flips the Budget Analyst's backstory for the optional Scenario C prompt regression demo. |
+| `/travel-concierge/policies/budget/prompt_variant` | `"stable"` (default) or `"regressed"` — flips the Budget Analyst's backstory. Lets operators swap in a reviewer-grade variant of the Budget crew at runtime without a redeploy. |
 
 ---
 
@@ -186,11 +187,11 @@ Weather-only additions:
 | `WEATHER_PROVIDER_FN` | Lambda name (`travel-concierge-weather-provider`). Primary call path. |
 | `WEATHER_PROVIDER_URL` | Lambda Function URL. Fallback path if direct Lambda invoke permission is missing. |
 
-Flights-only additions (used by Scenario D fault injection):
+Flights-only additions:
 
 | Env var | Purpose |
 |---|---|
-| `DDB_REGION` | Optional override for the DynamoDB client region. Falls back to `AWS_REGION`. Scenario D flips this to `us-west-2` to simulate config drift. |
+| `DDB_REGION` | Optional override for the DynamoDB client region. Falls back to `AWS_REGION`. Lets operators test region-drift / cross-region recovery scenarios without redeploying the agent. |
 
 ### 3.1.1 OTel environment variables (EKS hotels pod)
 
@@ -459,22 +460,30 @@ Run start adds 10-20 s to the first request of the day.
 
 ---
 
-## 5. Fault scenarios (demo lane)
+## 5. Observability + investigation flow
 
-Scripts in `scripts/scenario.sh` toggle three real AWS resource changes that
-drive natively-metered failures through the OTel trace. All three take a
-snapshot of pre-change state before applying so `off` restores exactly what
-was there.
+Every hop in §4 emits an OpenTelemetry span. The orchestrator's and
+specialists' spans stitch into one trace tree in CloudWatch Transaction
+Search / Omni's trace detail view. From there:
 
-| Scenario | Target | Mechanism | Fault signature in trace |
-|---|---|---|---|
-| **A** | Flights role | `aws iam put-role-policy` adds an explicit `Deny` on `dynamodb:GetItem` to `travel-concierge-flights-role` | `AccessDeniedException` on the flights DDB span. CloudTrail: `PutRolePolicy` with the Deny statement. |
-| **B** | Weather Lambda | `aws lambda update-function-configuration --memory-size 128` | Elevated `AWS/Lambda.Duration`, `InitDuration` on cold starts. CloudTrail: `UpdateFunctionConfiguration`. |
-| **D** | Flights AgentCore runtime | `UpdateAgentRuntime` sets `DDB_REGION=us-west-2` env var | `AccessDeniedException` on the flights DDB span, with a us-west-2 ARN in the error (deeper red herring — role is unchanged). CloudTrail: `UpdateAgentRuntime`. |
+- **Omni UI** — timeline + flame-graph + span-tree view for the request,
+  with Input/Output messages, token usage, and tool arguments rendered
+  inline from the OTel GenAI semantic conventions.
+- **Agent Observability panel** — per-agent topology, token-mix, tool-call
+  counts, and evaluation scores.
+- **Transaction Search** — SQL-like search for finding comparable traces
+  by `aws.remote.service`, `service.name`, duration, status, etc.
+- **AWS DevOps Agent** — kicked off from an Omni alarm or by picking a
+  specific trace. It reads the same spans + CloudTrail + CloudWatch Logs,
+  correlates signals, and produces a root-cause investigation report with
+  evidence. See `infra/ops-automation/` for the alarm → investigation
+  Lambda wiring.
 
-Each one has been validated end-to-end: fault captured in trace, DevOps
-Agent can walk the audit trail and identify the root cause. See
-`docs/trace-walkthrough.md` for the layer-by-layer Omni investigation path.
+Typical fault classes an operator would investigate on a workload like this:
+IAM denials on tool calls, Lambda saturation, AgentCore configuration drift,
+and span-content gaps (sample-code deploys that forgot
+`AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true`). Each of these shows up as a
+distinct fault signature in the trace tree.
 
 ---
 
@@ -527,10 +536,7 @@ travel-concierge/
 │   ├── dev-local-install.sh           # One-shot pip install for all 6 agents
 │   ├── dev-local.sh                   # Start the 6-process local stack
 │   ├── dev-local-stop.sh              # Stop the local stack
-│   ├── streamlit-prod.sh              # Launch Streamlit against prod AgentCore
-│   ├── scenario.sh                    # A/B/D fault injection toggles + snapshots
-│   ├── get_fault_trace.sh             # Find a recent fault trace for DevOps Agent
-│   └── snapshots/                     # Pre-change state captured by scenario.sh
+│   └── streamlit-prod.sh              # Launch Streamlit against prod AgentCore
 ├── frontend/
 │   └── app.py                         # Streamlit chat UI, SSE drain, markdown sanitize
 └── docs/
@@ -560,7 +566,8 @@ travel-concierge/
   `AWS_PROFILE=omni-demo python3 infra/deploy.py --only orchestrator --skip-build`
 - Launch frontend:
   `cd frontend && AWS_PROFILE=omni-demo streamlit run app.py --server.port 8501`
-- Fault toggles: `./scripts/scenario.sh A on`, `./scripts/scenario.sh B on`, `./scripts/scenario.sh D on`.
+- (Optional) wire the alarm → DevOps Agent investigation Lambda from
+  `infra/ops-automation/` to automate incident investigation.
 
 Note: the Cloudflare quick-tunnel URL changes on every pod restart. If the
 EKS pod is recycled (image push, node reclaim, manifest apply), re-run

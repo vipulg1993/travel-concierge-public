@@ -25,9 +25,6 @@ across every cloud, every environment, every framework, and lands in
   provider, 4 AgentCore Runtimes, 4 ECR repos.
 - **Streamlit UI** (`frontend/app.py`) that invokes the orchestrator via
   `bedrock-agentcore:InvokeAgentRuntime`.
-- **Fault scenarios** (`scripts/scenario.sh`) that trigger real AWS
-  resource changes (not synthetic SSM flags) so Omni + the DevOps Agent
-  investigate a real failure mode.
 - **Docs** (`docs/`) covering architecture and telemetry ingestion.
 
 See `docs/architecture.md` for the full system picture and
@@ -175,27 +172,6 @@ AWS_PROFILE=omni-demo ./scripts/streamlit-prod.sh
 
 The script explicitly unsets `ORCHESTRATOR_LOCAL_URL` so the frontend
 takes the SSM/ARN path even if that env var is set elsewhere.
-
-## Fault scenarios
-
-Driven by `scripts/scenario.sh <A|B|D|E> <on|off|status>`. Each scenario
-changes a REAL AWS resource (no synthetic flags) and snapshots the prior
-state to `scripts/snapshots/` so `off` restores it bit-exact.
-
-| Scenario | Resource change                                              | Observable failure                                              |
-|----------|--------------------------------------------------------------|-----------------------------------------------------------------|
-| **A**    | Attach `Deny` on `dynamodb:GetItem` to the flights IAM role. | Flights spans fault with `AccessDeniedException`.               |
-| **B**    | Set the weather-provider Lambda's memory to 128 MB.          | AWS/Lambda `Duration` climbs; weather subtree widens.           |
-| **D**    | Set `DDB_REGION=us-west-2` on the flights AgentCore runtime. | Flights `dynamodb:GetItem` fails with region-mismatch deny.     |
-| **E**    | Flip `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false` on the hotels EKS pod. | Hotels chat spans arrive with no input/output content; other agents unaffected. |
-
-Example:
-
-```bash
-AWS_PROFILE=omni-demo AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID scripts/scenario.sh A on
-# ... exercise Streamlit → observe fault in Omni, run DevOps Agent ...
-AWS_PROFILE=omni-demo AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID scripts/scenario.sh A off
-```
 
 ## Docs
 
