@@ -1,0 +1,10 @@
+# Semgrep ignore file.
+#
+# infra/deploy.py uses subprocess.run with a list of args (shell=False) to run
+# the local container builder (finch/docker) and the ECR login flow. All
+# arguments are internal constants or come from an authenticated ECR
+# `GetAuthorizationToken` response — not user input. Semgrep's
+# `dangerous-subprocess-use` rule is a false positive here; the inline
+# `# nosemgrep` comments are also present as the primary suppression, this
+# file is a belt-and-suspenders backup for scanners that read .semgrepignore.
+infra/deploy.py
