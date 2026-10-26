@@ -70,13 +70,13 @@ RUNTIME_NAMES = {a: f"travel_concierge_{a}" for a in AGENT_ORDER}
 
 def _run(cmd: list, env: dict = None, cwd: Path = None, check: bool = True) -> subprocess.CompletedProcess:
     log.info("$ %s", " ".join(cmd))
-    return subprocess.run(cmd, cwd=cwd, env=env or os.environ.copy(), check=check)  # nosemgrep  # nosec B603 - cmd is a fixed list built from internal constants (image tags, ECR repo names, finch/docker tool names); no user input flows in
+    return subprocess.run(cmd, cwd=cwd, env=env or os.environ.copy(), check=check)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit  # nosec B603 - cmd is a fixed list built from internal constants; shell=False (default); no user input
 
 
 def _build_tool() -> str:
     for t in ("finch", "docker"):
         try:
-            subprocess.run([t, "--version"], check=True, capture_output=True)  # nosemgrep  # nosec B603 - t is a hardcoded tool name ("finch" or "docker")
+            subprocess.run([t, "--version"], check=True, capture_output=True)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit  # nosec B603 - t is a hardcoded tool name ("finch" or "docker"); shell=False
             return t
         except (FileNotFoundError, subprocess.CalledProcessError):
             continue
@@ -110,7 +110,7 @@ def ecr_login(builder: str) -> None:
     endpoint = tok["proxyEndpoint"]
     host = endpoint.replace("https://", "")
     log.info("$ %s login --username AWS --password-stdin %s", builder, host)
-    subprocess.run(  # nosemgrep  # nosec B603 - builder/host come from an authenticated ECR authorization token; no shell=True; no user input
+    subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit  # nosec B603 - builder/host come from an authenticated ECR GetAuthorizationToken response; shell=False; no user input
         [builder, "login", "--username", "AWS", "--password-stdin", host],
         input=password.encode("utf-8"),
         check=True,

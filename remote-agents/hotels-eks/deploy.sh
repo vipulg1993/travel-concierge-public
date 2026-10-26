@@ -3,7 +3,18 @@
 #
 # Prereqs:
 #   - EKS cluster already created: `eksctl create cluster -f cluster.yaml`
-#   - omni-demo AWS profile with admin access
+#   - AWS profile used for this ONE-TIME BOOTSTRAP only. Permissions needed:
+#       EKS cluster admin on the travel-concierge cluster (via the cluster's
+#       aws-auth ConfigMap), IAM (CreateRole/AttachRolePolicy/CreatePolicy
+#       scoped to travel-concierge-hotels-eks-role and the policy ARN below),
+#       ECR (DescribeRepositories, CreateRepository, GetAuthorizationToken,
+#       PushImage), SSM (PutParameter on /travel-concierge/remote-agents/
+#       hotels-eks-url only), and sts:GetCallerIdentity. The sample uses an
+#       administrator-equivalent profile for simplicity. The DEPLOYED HOTELS
+#       POD runs as the IRSA role `travel-concierge-hotels-eks-role` with
+#       permissions scoped to DynamoDB GetItem on travel-concierge-hotels,
+#       Bedrock InvokeModel on the Claude Sonnet 4 inference profile, and
+#       X-Ray PutTraceSegments/PutSpans only — not as this bootstrap profile.
 #   - eksctl, kubectl, aws, finch (or docker) on PATH
 #
 # What this does, in order:
