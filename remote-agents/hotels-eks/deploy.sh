@@ -3,18 +3,25 @@
 #
 # Prereqs:
 #   - EKS cluster already created: `eksctl create cluster -f cluster.yaml`
-#   - AWS profile used for this ONE-TIME BOOTSTRAP only. Permissions needed:
-#       EKS cluster admin on the travel-concierge cluster (via the cluster's
-#       aws-auth ConfigMap), IAM (CreateRole/AttachRolePolicy/CreatePolicy
-#       scoped to travel-concierge-hotels-eks-role and the policy ARN below),
-#       ECR (DescribeRepositories, CreateRepository, GetAuthorizationToken,
-#       PushImage), SSM (PutParameter on /travel-concierge/remote-agents/
-#       hotels-eks-url only), and sts:GetCallerIdentity. The sample uses an
-#       administrator-equivalent profile for simplicity. The DEPLOYED HOTELS
-#       POD runs as the IRSA role `travel-concierge-hotels-eks-role` with
-#       permissions scoped to DynamoDB GetItem on travel-concierge-hotels,
-#       Bedrock InvokeModel on the Claude Sonnet 4 inference profile, and
-#       X-Ray PutTraceSegments/PutSpans only — not as this bootstrap profile.
+#   - A dedicated IAM identity (role or user) for this one-time bootstrap
+#     scoped to EXACTLY these permissions (grant-least-privilege per the
+#     AWS IAM User Guide,
+#     https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html):
+#       - EKS cluster admin on the travel-concierge cluster (granted via the
+#         cluster's aws-auth ConfigMap, not an IAM policy)
+#       - iam:CreateRole, iam:AttachRolePolicy, iam:CreatePolicy on
+#         travel-concierge-hotels-eks-role and the policy ARN this script
+#         creates (see iam-policy.json)
+#       - ecr:DescribeRepositories, ecr:CreateRepository,
+#         ecr:GetAuthorizationToken, ecr:PushImage on
+#         arn:aws:ecr:<region>:<account>:repository/travel-concierge-hotels-eks
+#       - ssm:PutParameter on /travel-concierge/remote-agents/hotels-eks-url
+#       - sts:GetCallerIdentity
+#     The DEPLOYED HOTELS POD runs as the IRSA role
+#     `travel-concierge-hotels-eks-role` (minimum policy in iam-policy.json:
+#     DynamoDB GetItem on travel-concierge-hotels, Bedrock InvokeModel on the
+#     Claude Sonnet 4 inference profile, X-Ray PutTraceSegments/PutSpans) —
+#     the bootstrap identity above is never used at runtime.
 #   - eksctl, kubectl, aws, finch (or docker) on PATH
 #
 # What this does, in order:
